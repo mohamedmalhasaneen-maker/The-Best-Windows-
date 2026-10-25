@@ -1,0 +1,312 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+}
+
+/* Dark Mode Core Theme overrides (only active on screen to allow pristine white print) */
+@media screen {
+  .dark-mode {
+    background-color: #0F172A !important;
+    color: #F1F5F9 !important;
+  }
+  
+  /* App backgrounds */
+  .dark-mode.min-h-screen {
+    background-color: #0B0F19 !important;
+  }
+
+  /* White card overrides */
+  .dark-mode .bg-white {
+    background-color: #131B2E !important;
+    color: #F8FAFC !important;
+    border-color: #1E293B !important;
+  }
+
+  .dark-mode .bg-slate-50 {
+    background-color: #0F172A !important;
+    color: #F1F5F9 !important;
+  }
+
+  .dark-mode .bg-slate-100 {
+    background-color: #1E293B !important;
+    color: #F1F5F9 !important;
+  }
+
+  .dark-mode .bg-[#F8F9FA] {
+    background-color: #0B0F19 !important;
+  }
+
+  .dark-mode .bg-[#F1F5F9] {
+    background-color: #131B2E !important;
+    border-color: #1E293B !important;
+  }
+
+  /* Form inputs and select elements */
+  .dark-mode input:not([type="checkbox"]):not([type="radio"]), 
+  .dark-mode select, 
+  .dark-mode textarea {
+    background-color: #0F172A !important;
+    color: #F8FAFC !important;
+    border-color: #1E293B !important;
+  }
+
+  .dark-mode input:not([type="checkbox"]):not([type="radio"]):focus, 
+  .dark-mode select:focus, 
+  .dark-mode textarea:focus {
+    background-color: #1E293B !important;
+    border-color: #F59E0B !important;
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25) !important;
+  }
+
+  /* Border color mappings */
+  .dark-mode .border-slate-150\/80,
+  .dark-mode .border-slate-200,
+  .dark-mode .border-slate-200\/60,
+  .dark-mode .border-slate-200\/80,
+  .dark-mode .border-slate-200\/90,
+  .dark-mode .border-slate-100 {
+    border-color: #1E293B !important;
+  }
+
+  .dark-mode .border-slate-350 {
+    border-color: #475569 !important;
+  }
+
+  /* Text color overrides */
+  .dark-mode .text-[#0F172A] {
+    color: #F59E0B !important;
+  }
+
+  .dark-mode .text-[#1A1A1A] {
+    color: #E2E8F0 !important;
+  }
+
+  .dark-mode .text-slate-900 {
+    color: #F8FAFC !important;
+  }
+
+  .dark-mode .text-slate-800 {
+    color: #E2E8F0 !important;
+  }
+
+  .dark-mode .text-slate-700 {
+    color: #CBD5E1 !important;
+  }
+
+  .dark-mode .text-slate-600 {
+    color: #94A3B8 !important;
+  }
+
+  .dark-mode .text-slate-500 {
+    color: #64748B !important;
+  }
+
+  .dark-mode .text-slate-400 {
+    color: #475569 !important;
+  }
+
+  /* Special UI tags override */
+  .dark-mode .bg-green-50 {
+    background-color: rgba(6, 78, 59, 0.5) !important;
+    color: #34D399 !important;
+  }
+
+  .dark-mode .bg-green-100 {
+    background-color: rgba(6, 78, 59, 0.7) !important;
+    color: #34D399 !important;
+  }
+
+  .dark-mode .bg-amber-50 {
+    background-color: rgba(120, 53, 15, 0.4) !important;
+    color: #FBBF24 !important;
+  }
+
+  .dark-mode .bg-yellow-50 {
+    background-color: rgba(120, 53, 15, 0.4) !important;
+    color: #FBBF24 !important;
+  }
+
+  .dark-mode .bg-emerald-50 {
+    background-color: rgba(6, 78, 59, 0.5) !important;
+    color: #34D399 !important;
+  }
+
+  .dark-mode .bg-emerald-100 {
+    background-color: rgba(6, 78, 59, 0.7) !important;
+    color: #34D399 !important;
+  }
+
+  .dark-mode .bg-red-50 {
+    background-color: rgba(127, 29, 29, 0.4) !important;
+    color: #FCA5A5 !important;
+  }
+
+  .dark-mode .bg-red-100 {
+    background-color: rgba(127, 29, 29, 0.6) !important;
+    color: #FCA5A5 !important;
+  }
+
+  .dark-mode .bg-[#0F172A] {
+    background-color: #1E293B !important;
+  }
+
+  .dark-mode .bg-[#0F172A]\/5 {
+    background-color: rgba(30, 41, 59, 0.5) !important;
+    color: #F8FAFC !important;
+  }
+
+  .dark-mode .bg-slate-200\/60 {
+    background-color: #0F172A !important;
+  }
+
+  .dark-mode .hover\:bg-slate-100:hover {
+    background-color: #1E293B !important;
+  }
+
+  .dark-mode .hover\:bg-slate-50:hover {
+    background-color: #0F172A !important;
+  }
+
+  /* Sticky mobile bar and chats */
+  .dark-mode .fixed.bottom-0 {
+    background-color: rgba(19, 27, 46, 0.95) !important;
+    border-top-color: #1E293B !important;
+  }
+
+  /* Modals overrides */
+  .dark-mode .bg-white\/80 {
+    background-color: rgba(19, 27, 46, 0.8) !important;
+  }
+
+  /* Chat popup override */
+  .dark-mode .shadow-2xl {
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5) !important;
+  }
+
+  .dark-mode .bg-[#FFFBEB] {
+    background-color: #1E293B !important;
+    color: #FEF3C7 !important;
+  }
+
+  /* Keep A4 PDF Preview & Export Paper Sheet crisp white paper with true ink in Dark Mode */
+  .dark-mode .a4-paper-lock,
+  .dark-mode .a4-paper-lock .bg-white {
+    background-color: #FFFFFF !important;
+    color: #0F172A !important;
+    border-color: #E2E8F0 !important;
+  }
+
+  .dark-mode .a4-paper-lock .bg-slate-50 {
+    background-color: #F8FAFC !important;
+    color: #0F172A !important;
+  }
+
+  .dark-mode .a4-paper-lock .bg-slate-100 {
+    background-color: #F1F5F9 !important;
+    color: #0F172A !important;
+  }
+
+  .dark-mode .a4-paper-lock .bg-amber-50 {
+    background-color: #FFFBEB !important;
+    color: #92400E !important;
+  }
+
+  .dark-mode .a4-paper-lock .bg-\[\#0F172A\] {
+    background-color: #0F172A !important;
+    color: #FFFFFF !important;
+  }
+
+  .dark-mode .a4-paper-lock .text-\[\#0F172A\],
+  .dark-mode .a4-paper-lock .text-slate-900 {
+    color: #0F172A !important;
+  }
+
+  .dark-mode .a4-paper-lock .text-slate-800 {
+    color: #1E293B !important;
+  }
+
+  .dark-mode .a4-paper-lock .text-slate-700 {
+    color: #334155 !important;
+  }
+
+  .dark-mode .a4-paper-lock .text-slate-600 {
+    color: #475569 !important;
+  }
+
+  .dark-mode .a4-paper-lock .text-slate-500 {
+    color: #64748B !important;
+  }
+
+  .dark-mode .a4-paper-lock .text-slate-400 {
+    color: #94A3B8 !important;
+  }
+
+  .dark-mode .a4-paper-lock .border-slate-900 {
+    border-color: #0F172A !important;
+  }
+
+  .dark-mode .a4-paper-lock .border-slate-200 {
+    border-color: #E2E8F0 !important;
+  }
+
+  .dark-mode .a4-paper-lock .border-slate-100 {
+    border-color: #F1F5F9 !important;
+  }
+}
+
+/* Print Optimization and Exact 1:1 A4 Page Configuration */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 0mm;
+  }
+
+  html,
+  body {
+    width: 210mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  #root,
+  main,
+  .min-h-screen {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: #ffffff !important;
+  }
+
+  .a4-print-page {
+    width: 210mm !important;
+    height: 297mm !important;
+    page-break-after: always !important;
+    break-after: page !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    overflow: hidden !important;
+    box-shadow: none !important;
+    border: none !important;
+    margin: 0 auto !important;
+  }
+
+  .a4-print-page:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
+  * {
+    color-adjust: exact !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+

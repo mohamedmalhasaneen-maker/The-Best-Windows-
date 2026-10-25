@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "Quote": {
+      "title": "Quote",
+      "description": "Saved customer quotation for The Best Windows UPVC & WPC windows and doors",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 256, "description": "Unique identifier for the quote" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 500, "description": "Name/label of the saved quote" },
+        "customer": {
+          "type": "object",
+          "description": "Customer info associated with the quote"
+        },
+        "items": {
+          "type": "array",
+          "description": "List of window/door quote items"
+        },
+        "totalPrice": { "type": "number", "description": "Calculated total price in EGP" },
+        "discountPercentage": { "type": "number", "description": "Optional discount percentage applied" },
+        "date": { "type": "string", "maxLength": 100, "description": "Formatted date string" },
+        "createdAt": { "type": "string", "maxLength": 100, "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "maxLength": 100, "description": "Update ISO timestamp" },
+        "serverUpdatedAt": { "type": "string", "format": "date-time", "description": "Firestore server timestamp" }
+      },
+      "required": ["id", "name", "customer", "items", "totalPrice"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Saved customer profile for quick access and reuse across quotes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 256, "description": "Unique customer ID" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 300, "description": "Customer full name" },
+        "phone": { "type": "string", "maxLength": 100, "description": "Customer primary contact phone" },
+        "address": { "type": "string", "maxLength": 500, "description": "Customer location or project site address" },
+        "notes": { "type": "string", "maxLength": 2000, "description": "General customer notes or preferences" },
+        "createdAt": { "type": "string", "maxLength": 100, "description": "Registration date timestamp" },
+        "updatedAt": { "type": "string", "maxLength": 100, "description": "Last update ISO timestamp" },
+        "serverUpdatedAt": { "type": "string", "format": "date-time", "description": "Firestore server timestamp" }
+      },
+      "required": ["id", "name", "phone"]
+    }
+  },
+  "firestore": {
+    "/quotes/{quoteId}": {
+      "schema": "Quote",
+      "description": "Stored quotations for The Best Windows"
+    },
+    "/customers/{customerId}": {
+      "schema": "Customer",
+      "description": "Registered customer profiles directory"
+    }
+  }
+}
