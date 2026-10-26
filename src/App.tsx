@@ -214,6 +214,20 @@ export default function App() {
     } catch (e) {}
   };
 
+  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false;
+    return window.matchMedia('(max-width: 767px)').matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(max-width: 767px)');
+    const handleChange = (e: MediaQueryListEvent) => setIsMobileViewport(e.matches);
+    setIsMobileViewport(mq.matches);
+    mq.addEventListener('change', handleChange);
+    return () => mq.removeEventListener('change', handleChange);
+  }, []);
+
   const [profiles, setProfiles] = useState<Record<string, Profile>>(() => {
     try {
       const saved = localStorage.getItem('almekawy_custom_profiles');
@@ -226,11 +240,7 @@ export default function App() {
   const [addons, setAddons] = useState<Record<string, Addon>>(() => {
     try {
       const saved = localStorage.getItem('almekawy_custom_addons');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return { ...ADDONS, ...parsed };
-      }
-      return ADDONS;
+      return saved ? JSON.parse(saved) : ADDONS;
     } catch (e) {
       return ADDONS;
     }
@@ -241,6 +251,15 @@ export default function App() {
     setAddons(updatedAddons);
     localStorage.setItem('almekawy_custom_profiles', JSON.stringify(updatedProfiles));
     localStorage.setItem('almekawy_custom_addons', JSON.stringify(updatedAddons));
+
+    const fallbackProfile = Object.keys(updatedProfiles)[0] || 'newline';
+    setItems((prev) =>
+      prev.map((item) => ({
+        ...item,
+        profile: updatedProfiles[item.profile] ? item.profile : fallbackProfile,
+        addons: item.addons.filter((addonId) => Boolean(updatedAddons[addonId])),
+      }))
+    );
   };
 
   const handleResetPrices = () => {
@@ -263,24 +282,28 @@ export default function App() {
     additionalNotes: []
   });
 
-  const [items, setItems] = useState<QuoteItem[]>([
-    {
-      id: Date.now(),
-      title: 'بند رقم 1 (مثال: شباك غرفه)',
-      itemType: 'window',
-      width: 120,
-      height: 120,
-      profile: 'newline',
-      opening: 'جرار',
-      innerType: 'glass',
-      glassType: 'أبيض شفاف',
-      addons: [],
-      quantity: 1
-    }
-  ]);
+  const [items, setItems] = useState<QuoteItem[]>(() => {
+    const initialProfile = Object.keys(profiles)[0] || 'newline';
+    return [
+      {
+        id: Date.now(),
+        title: 'بند رقم 1 (مثال: شباك غرفه)',
+        itemType: 'window',
+        width: 120,
+        height: 120,
+        profile: initialProfile,
+        opening: 'جرار',
+        innerType: 'glass',
+        glassType: 'أبيض شفاف',
+        addons: [],
+        quantity: 1
+      }
+    ];
+  });
 
   const addNewItem = () => {
     setActiveMainTab('input');
+    const defaultProfile = Object.keys(profiles)[0] || 'newline';
     setItems([
       ...items,
       {
@@ -289,7 +312,7 @@ export default function App() {
         itemType: 'window',
         width: 100,
         height: 100,
-        profile: 'newline',
+        profile: defaultProfile,
         opening: 'جرار',
         innerType: 'glass',
         glassType: 'أبيض شفاف',
@@ -314,6 +337,7 @@ export default function App() {
     setItems(prev => {
       const remaining = prev.filter(item => item.id !== id);
       if (remaining.length === 0) {
+        const defaultProfile = Object.keys(profiles)[0] || 'newline';
         // If all items removed, reset with 1 default window item
         return [{
           id: Date.now(),
@@ -321,7 +345,7 @@ export default function App() {
           itemType: 'window',
           width: 100,
           height: 100,
-          profile: 'pensa',
+          profile: defaultProfile,
           opening: 'جرار',
           innerType: 'double',
           glassType: 'شفاف 6 مم',
@@ -710,6 +734,18 @@ export default function App() {
 
   return (
     <div className={`min-h-screen ${theme === 'dark' ? 'dark-mode' : ''} bg-[#F8F9FA] text-[#1A1A1A] font-sans selection:bg-yellow-200 selection:text-[#0F172A] transition-colors duration-300`} dir="rtl">
+      {/* Semantic crawlable company & UPVC services summary for search engines */}
+      <section className="sr-only print:hidden" aria-label="خدمات وفروع The Best Windows في مصر">
+        <h2>توريد وتركيب شبابيك وأبواب UPVC في مصر من {BRAND_NAME}</h2>
+        <p>
+          تتخصص شركة {BRAND_NAME} في تصنيع وتوريد وتركيب شبابيك وأبواب UPVC و WPC المعتمدة في مصر، وتشمل خدماتنا أنظمة الجرار والمفصلي والقلاب والمفصلي قلاب والثابت، مع خيارات الزجاج الدبل جلاس لعزل الصوت والحرارة والأتربة، وسلك البليسيه للحشرات والبلاك أوت ونظام باندا.
+        </p>
+        <ul>
+          <li>قطاعات UPVC المعتمدة: نيولاين، بريمير، كرافت لاين، وينتك Wintech، برو لاين، وكومبن.</li>
+          <li>فروع ومعارض ومصنع {BRAND_NAME}: فرع طنطا، فرع مدينة نصر بالقاهرة، معرض طريق المحلة – المنصورة، ومقر المصنع، مع معاينة ورفع مقاسات وحاسبة تسعير فورية وإصدار عرض سعر PDF.</li>
+        </ul>
+      </section>
+
       {/* 1. Ground-up Mobile-Dedicated View (Mobile Only < md) */}
       <MobileView
         customer={customer}
@@ -739,6 +775,7 @@ export default function App() {
         handleSelectCustomer={handleSelectCustomer}
         handleSaveCustomerFromForm={handleSaveCustomerFromForm}
         onDuplicateItem={handleDuplicateItem}
+        isPrimaryHeading={isMobileViewport}
       />
 
       {/* 2. Desktop-Dedicated View (Unchanged Desktop Layout >= md, plus Canonical Print Target) */}
@@ -752,6 +789,7 @@ export default function App() {
           onSaveQuoteAuto={handleSaveQuoteAuto}
           customersCount={savedCustomers.length}
           onOpenCustomers={() => setPasswordTarget('customers')}
+          isPrimaryHeading={!isMobileViewport}
         />
 
         <main className="max-w-5xl mx-auto px-4 py-12 print:max-w-none print:p-0 print:m-0">

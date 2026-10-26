@@ -25,6 +25,7 @@ interface HeaderProps {
   onSaveQuoteAuto: () => void;
   customersCount?: number;
   onOpenCustomers?: () => void;
+  isPrimaryHeading?: boolean;
 }
 
 export default function Header({
@@ -34,6 +35,7 @@ export default function Header({
   onSaveQuoteAuto,
   customersCount,
   onOpenCustomers,
+  isPrimaryHeading = true,
 }: HeaderProps) {
   const [justSaved, setJustSaved] = useState(false);
   const [contactModalType, setContactModalType] = useState<'phone' | 'whatsapp' | 'all' | null>(
@@ -49,6 +51,8 @@ export default function Header({
     }, 2000);
   };
 
+  const BrandHeadingTag = isPrimaryHeading ? 'h1' : 'div';
+
   return (
     <header className="bg-[#0F172A] text-white py-5 border-b-4 border-[#F59E0B] shadow-xl print:hidden">
       <div className="max-w-6xl mx-auto px-4 flex flex-col gap-4 text-right">
@@ -61,18 +65,19 @@ export default function Header({
           >
             <img
               src={logoUrl}
-              alt={`${BRAND_NAME} Logo`}
+              alt={`${BRAND_NAME} - شبابيك وأبواب UPVC في مصر`}
               className="w-15 h-15 rounded-2xl border-2 border-[#F59E0B] object-cover shadow-md shrink-0 bg-white"
               referrerPolicy="no-referrer"
             />
-            <div className="text-right">
-              <h1 className="text-2xl sm:text-3xl font-black tracking-tight leading-none font-display text-white whitespace-nowrap">
+            <BrandHeadingTag className="text-right m-0">
+              <span className="text-2xl sm:text-3xl font-black tracking-tight leading-none font-display text-white whitespace-nowrap block">
                 {BRAND_NAME}
-              </h1>
-              <p className="text-slate-300 text-xs mt-1.5 font-bold">
+              </span>
+              <span className="text-slate-300 text-xs mt-1.5 font-bold font-sans block">
                 أبواب وشبابيك UPVC & WPC المعتمدة
-              </p>
-            </div>
+              </span>
+              <span className="sr-only"> - توريد وتركيب في مصر</span>
+            </BrandHeadingTag>
           </motion.div>
 
           <motion.div

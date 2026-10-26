@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Lock, ShieldAlert, Check, Coins, RefreshCw, Layers, Sliders } from 'lucide-react';
+import { X, Lock, ShieldAlert, Check, Coins, RefreshCw, Layers, Sliders, Trash2 } from 'lucide-react';
 import { Profile, Addon } from '../types';
 import { BRAND_NAME } from '../constants';
 
@@ -34,6 +34,13 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
   const [tempProfiles, setTempProfiles] = useState<Record<string, Profile>>({});
   const [tempAddons, setTempAddons] = useState<Record<string, Addon>>({});
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [statusBanner, setStatusBanner] = useState<{ type: 'success' | 'warning'; text: string } | null>(null);
+
+  const [newItemType, setNewItemType] = useState<'profile' | 'addon'>('profile');
+  const [newItemName, setNewItemName] = useState('');
+  const [newItemPrice, setNewItemPrice] = useState('');
 
   // Sync temporary state with actual active prices
   useEffect(() => {
@@ -44,9 +51,18 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
       setPassword('');
       setErrorMsg('');
       setSaveSuccess(false);
+      setConfirmDeleteId(null);
+      setConfirmReset(false);
+      setStatusBanner(null);
+      setNewItemName('');
+      setNewItemPrice('');
       localStorage.removeItem('almekawy_dev_authorized');
     }
   }, [isOpen, profiles, addons]);
+
+  const showBanner = (type: 'success' | 'warning', text: string) => {
+    setStatusBanner({ type, text });
+  };
 
   const handlePasswordSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,6 +77,9 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
 
   const handleClose = () => {
     setIsAuthorized(false);
+    setConfirmDeleteId(null);
+    setConfirmReset(false);
+    setStatusBanner(null);
     localStorage.removeItem('almekawy_dev_authorized');
     onClose();
   };
@@ -89,20 +108,78 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
     }));
   };
 
+  const handleAddCustomItem = () => {
+    const name = newItemName.trim();
+    const price = Number(newItemPrice || 0);
+
+    if (!name) {
+      showBanner('warning', 'يرجى إدخال اسم البند أولاً قبل الإضافة.');
+      return;
+    }
+
+    const customId = `custom_${Date.now()}`;
+    if (newItemType === 'profile') {
+      setTempProfiles((prev) => ({
+        ...prev,
+        [customId]: { id: customId, name, price },
+      }));
+      setActiveTab('profiles');
+    } else {
+      setTempAddons((prev) => ({
+        ...prev,
+        [customId]: { id: customId, name, price, isFlat: true, unit: 'للقطعة' },
+      }));
+      setActiveTab('addons');
+    }
+
+    setNewItemName('');
+    setNewItemPrice('');
+    showBanner('success', `تمت إضافة "${name}" — اضغط على "حفظ جميع الأسعار" بالأسفل لتثبيت التغييرات.`);
+  };
+
+  const handleDeleteProfile = (p: Profile) => {
+    if (Object.keys(tempProfiles).length <= 1) {
+      setConfirmDeleteId(null);
+      showBanner('warning', 'لا يمكن حذف آخر قطاع متبقٍ؛ يجب وجود قطاع واحد على الأقل للتسعير.');
+      return;
+    }
+    setTempProfiles((prev) => {
+      const copy = { ...prev };
+      delete copy[p.id];
+      return copy;
+    });
+    setConfirmDeleteId(null);
+    showBanner('success', `تم حذف البند "${p.name}" — اضغط على "حفظ جميع الأسعار" لتأكيد الحفظ.`);
+  };
+
+  const handleDeleteAddon = (a: Addon) => {
+    setTempAddons((prev) => {
+      const copy = { ...prev };
+      delete copy[a.id];
+      return copy;
+    });
+    setConfirmDeleteId(null);
+    showBanner('success', `تم حذف البند "${a.name}" — اضغط على "حفظ جميع الأسعار" لتأكيد الحفظ.`);
+  };
+
   const handleSave = () => {
     onSavePrices(tempProfiles, tempAddons);
-    alert('تم حفظ الأسعار بنجاح!');
-    handleClose();
+    setSaveSuccess(true);
+    setTimeout(() => {
+      handleClose();
+    }, 450);
   };
 
   const handleReset = () => {
-    if (confirm('هل أنت متأكد من رغبتك في إعادة تعيين جميع الأسعار إلى القيمة الافتراضية؟')) {
-      onResetPrices();
-      handleClose();
-    }
+    onResetPrices();
+    setConfirmReset(false);
+    handleClose();
   };
 
   if (!isOpen) return null;
+
+  const profileList = Object.values(tempProfiles) as Profile[];
+  const addonList = Object.values(tempAddons) as Addon[];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -213,7 +290,7 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
                       <span>تم تسجيل الدخول بنجاح كمطور/مشرف</span>
                     </p>
-                    <p className="text-[10px] text-emerald-600 font-bold">يمكنك الآن تعديل وتغيير قيم تسعير القطاعات والإضافات مباشرة.</p>
+                    <p className="text-[10px] text-emerald-600 font-bold">يمكنك الآن تعديل أو إضافة أو حذف أي بند من القطاعات والإضافات مباشرة.</p>
                   </div>
                   <button
                     onClick={handleLogout}
@@ -223,10 +300,32 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
                   </button>
                 </div>
 
+                {statusBanner && (
+                  <div
+                    className={`p-3 rounded-xl border text-xs font-black flex items-center justify-between gap-2 ${
+                      statusBanner.type === 'success'
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                        : 'bg-amber-50 border-amber-200 text-amber-800'
+                    }`}
+                  >
+                    <span>{statusBanner.text}</span>
+                    <button
+                      type="button"
+                      onClick={() => setStatusBanner(null)}
+                      className="text-current opacity-60 hover:opacity-100 p-1 cursor-pointer"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
+
                 {/* Tabs */}
                 <div className="flex border-b-2 border-slate-200">
                   <button
-                    onClick={() => setActiveTab('profiles')}
+                    onClick={() => {
+                      setActiveTab('profiles');
+                      setConfirmDeleteId(null);
+                    }}
                     className={`flex-1 py-3 text-center font-black text-sm transition-all border-b-4 flex items-center justify-center gap-2 cursor-pointer ${
                       activeTab === 'profiles'
                         ? 'border-[#0F172A] text-[#0F172A] bg-white rounded-t-xl'
@@ -234,10 +333,13 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
                     }`}
                   >
                     <Layers size={16} />
-                    <span>أسعار القطاعات والبروفايلات</span>
+                    <span>أسعار القطاعات والبروفايلات ({profileList.length})</span>
                   </button>
                   <button
-                    onClick={() => setActiveTab('addons')}
+                    onClick={() => {
+                      setActiveTab('addons');
+                      setConfirmDeleteId(null);
+                    }}
                     className={`flex-1 py-3 text-center font-black text-sm transition-all border-b-4 flex items-center justify-center gap-2 cursor-pointer ${
                       activeTab === 'addons'
                         ? 'border-[#0F172A] text-[#0F172A] bg-white rounded-t-xl'
@@ -245,7 +347,7 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
                     }`}
                   >
                     <Sliders size={16} />
-                    <span>أسعار الخيارات والإضافات</span>
+                    <span>أسعار الخيارات والإضافات ({addonList.length})</span>
                   </button>
                 </div>
 
@@ -259,59 +361,32 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
                     </h4>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       <select
-                        id="custom-item-type-select"
+                        value={newItemType}
+                        onChange={(e) => setNewItemType(e.target.value as 'profile' | 'addon')}
                         className="p-2.5 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none"
-                        defaultValue="profile"
                       >
                         <option value="profile">قطاع جديد (Profile)</option>
                         <option value="addon">إضافة اختيارية جديدة (Addon)</option>
                       </select>
                       <input
                         type="text"
-                        id="custom-item-name-input"
-                        placeholder="اسم القطاع أو الإضافية (مثل: جطاع لامينا)"
+                        value={newItemName}
+                        onChange={(e) => setNewItemName(e.target.value)}
+                        placeholder="اسم القطاع أو الإضافة (مثل: قطاع لامينا)"
                         className="p-2.5 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none"
                       />
                       <div className="flex gap-2">
                         <input
                           type="number"
-                          id="custom-item-price-input"
+                          value={newItemPrice}
+                          onChange={(e) => setNewItemPrice(e.target.value)}
                           placeholder="السعر (ج.م)"
                           className="w-full p-2.5 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none"
                           min="0"
                         />
                         <button
                           type="button"
-                          onClick={() => {
-                            const typeSelect = document.getElementById('custom-item-type-select') as HTMLSelectElement;
-                            const nameInput = document.getElementById('custom-item-name-input') as HTMLInputElement;
-                            const priceInput = document.getElementById('custom-item-price-input') as HTMLInputElement;
-                            
-                            const name = nameInput?.value?.trim();
-                            const price = Number(priceInput?.value || 0);
-                            const itemType = typeSelect?.value;
-
-                            if (!name) {
-                              alert('يرجى إدخال اسم صحيح');
-                              return;
-                            }
-
-                            const customId = `custom_${Date.now()}`;
-                            if (itemType === 'profile') {
-                              setTempProfiles(prev => ({
-                                ...prev,
-                                [customId]: { id: customId, name, price }
-                              }));
-                            } else {
-                              setTempAddons(prev => ({
-                                ...prev,
-                                [customId]: { id: customId, name, price, isFlat: true, unit: 'للقطعة' }
-                              }));
-                            }
-                            nameInput.value = '';
-                            priceInput.value = '';
-                            alert(`تمت إضافة "${name}" بنجاح! اضغط على "حفظ جميع الأسعار" في الأسفل لتثبيتها.`);
-                          }}
+                          onClick={handleAddCustomItem}
                           className="bg-[#0F172A] hover:bg-black text-[#FACC15] px-4 py-2.5 rounded-xl font-black text-xs shrink-0 cursor-pointer shadow-sm"
                         >
                           إضافة
@@ -322,30 +397,13 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
 
                   {activeTab === 'profiles' ? (
                     <div className="space-y-3">
-                      <p className="text-xs text-slate-400 font-bold mb-1">قم بتعديل سعر المتر المربع الأساسي للقطاعات التالية (بما يشمل الإكسسوارات والتركيب):</p>
-                      {(Object.values(tempProfiles) as Profile[]).map((p) => (
+                      <p className="text-xs text-slate-400 font-bold mb-1">قم بتعديل سعر المتر المربع الأساسي أو حذف أي بند من القطاعات التالية:</p>
+                      {profileList.map((p) => (
                         <div key={p.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 bg-white rounded-2xl border border-slate-200 gap-3">
-                          <span className="font-black text-sm text-slate-800 flex items-center gap-2">
+                          <span className="font-black text-sm text-slate-800 flex items-center gap-2 flex-wrap">
                             <span>{p.name}</span>
-                            {p.id.startsWith('custom_') && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (confirm(`هل أنت متأكد من حذف القطاع "${p.name}"؟`)) {
-                                    setTempProfiles(prev => {
-                                      const copy = { ...prev };
-                                      delete copy[p.id];
-                                      return copy;
-                                    });
-                                  }
-                                }}
-                                className="text-[10px] text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2 py-0.5 rounded-lg border border-red-200"
-                              >
-                                حذف
-                              </button>
-                            )}
                           </span>
-                          <div className="flex items-center gap-2 self-start sm:self-auto">
+                          <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
                             <input
                               type="number"
                               min="0"
@@ -354,15 +412,48 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
                               className="w-28 p-2 text-left bg-slate-50 border-2 border-slate-150 rounded-xl font-bold font-mono focus:border-[#0F172A] focus:bg-white outline-none"
                             />
                             <span className="text-xs text-slate-400 font-extrabold font-mono">L.E / m²</span>
+
+                            {confirmDeleteId === p.id ? (
+                              <div className="flex items-center gap-1 mr-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteProfile(p)}
+                                  className="text-[11px] font-black text-white bg-red-600 hover:bg-red-700 px-2.5 py-1.5 rounded-xl transition cursor-pointer"
+                                >
+                                  تأكيد الحذف
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(null)}
+                                  className="text-[11px] font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 px-2 py-1.5 rounded-xl transition cursor-pointer"
+                                >
+                                  إلغاء
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteId(p.id)}
+                                title={`حذف ${p.name}`}
+                                className="mr-1 text-xs font-black text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2.5 py-2 rounded-xl border border-red-200 transition flex items-center gap-1 cursor-pointer"
+                              >
+                                <Trash2 size={14} />
+                                <span>حذف</span>
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      <p className="text-xs text-slate-400 font-bold mb-1">قم بتعديل تسعير الخيارات الإضافية المتنوعة لكل متر مربع أو لكل قطعة:</p>
-                      {(Object.values(tempAddons) as Addon[])
-                        .map((a) => (
+                      <p className="text-xs text-slate-400 font-bold mb-1">قم بتعديل تسعير أو حذف أي بند من الخيارات الإضافية المتنوعة:</p>
+                      {addonList.length === 0 ? (
+                        <div className="p-6 text-center bg-white rounded-2xl border border-dashed border-slate-300 text-xs font-bold text-slate-500">
+                          لا توجد إضافات حالياً. يمكنك إضافة بند جديد من الأعلى أو استعادة الإعدادات الافتراضية.
+                        </div>
+                      ) : (
+                        addonList.map((a) => (
                           <div key={a.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 bg-white rounded-2xl border border-slate-200 gap-3">
                             <span className="font-black text-sm text-slate-850 flex items-center gap-1.5 flex-wrap">
                               <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
@@ -372,25 +463,8 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
                                   يعمل أيضاً كمضاعف × 1.5 لسعر القطاع الأساسي
                                 </span>
                               )}
-                              {a.id.startsWith('custom_') && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (confirm(`هل أنت متأكد من حذف الإضافة "${a.name}"؟`)) {
-                                      setTempAddons(prev => {
-                                        const copy = { ...prev };
-                                        delete copy[a.id];
-                                        return copy;
-                                      });
-                                    }
-                                  }}
-                                  className="text-[10px] text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2 py-0.5 rounded-lg border border-red-200"
-                                >
-                                  حذف
-                                </button>
-                              )}
                             </span>
-                            <div className="flex items-center gap-2 self-start sm:self-auto">
+                            <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
                               <input
                                 type="number"
                                 min="0"
@@ -401,9 +475,39 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
                               <span className="text-xs text-slate-400 font-extrabold font-mono">
                                 {a.id === 'panda' ? 'L.E / m²' : a.isFlat ? `L.E ${a.unit || 'قطعة'}` : 'L.E / m²'}
                               </span>
+
+                              {confirmDeleteId === a.id ? (
+                                <div className="flex items-center gap-1 mr-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteAddon(a)}
+                                    className="text-[11px] font-black text-white bg-red-600 hover:bg-red-700 px-2.5 py-1.5 rounded-xl transition cursor-pointer"
+                                  >
+                                    تأكيد الحذف
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteId(null)}
+                                    className="text-[11px] font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 px-2 py-1.5 rounded-xl transition cursor-pointer"
+                                  >
+                                    إلغاء
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(a.id)}
+                                  title={`حذف ${a.name}`}
+                                  className="mr-1 text-xs font-black text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2.5 py-2 rounded-xl border border-red-200 transition flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Trash2 size={14} />
+                                  <span>حذف</span>
+                                </button>
+                              )}
                             </div>
                           </div>
-                        ))}
+                        ))
+                      )}
                     </div>
                   )}
                 </div>
@@ -415,22 +519,44 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
         {/* Footer actions */}
         {isAuthorized && (
           <div className="p-5 bg-slate-100 border-t border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-3">
-            <button
-              onClick={handleReset}
-              className="w-full sm:w-auto text-xs font-black text-slate-600 hover:text-[#0F172A] hover:bg-white px-4 py-3 rounded-xl border border-slate-200 hover:border-slate-350 transition flex items-center gap-2 justify-center cursor-pointer"
-            >
-              <RefreshCw size={14} />
-              <span>إعادة تعيين للإعدادات الافتراضية</span>
-            </button>
+            {confirmReset ? (
+              <div className="w-full sm:w-auto flex items-center gap-2 justify-center">
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  className="text-xs font-black text-white bg-red-600 hover:bg-red-700 px-4 py-2.5 rounded-xl transition cursor-pointer"
+                >
+                  تأكيد استعادة الافتراضي
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmReset(false)}
+                  className="text-xs font-bold text-slate-600 bg-white hover:bg-slate-50 px-3 py-2.5 rounded-xl border border-slate-200 transition cursor-pointer"
+                >
+                  إلغاء
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmReset(true)}
+                className="w-full sm:w-auto text-xs font-black text-slate-600 hover:text-[#0F172A] hover:bg-white px-4 py-3 rounded-xl border border-slate-200 hover:border-slate-350 transition flex items-center gap-2 justify-center cursor-pointer"
+              >
+                <RefreshCw size={14} />
+                <span>إعادة تعيين للإعدادات الافتراضية</span>
+              </button>
+            )}
 
             <div className="flex gap-2 w-full sm:w-auto">
               <button
+                type="button"
                 onClick={handleClose}
                 className="flex-1 sm:flex-none text-xs font-black text-slate-500 bg-white hover:bg-slate-50 px-4 py-3 rounded-xl border border-slate-200 text-center cursor-pointer whitespace-nowrap"
               >
                 إغلاق النافذة
               </button>
               <button
+                type="button"
                 onClick={handleSave}
                 className="flex-1 sm:flex-none text-xs font-black bg-[#FACC15] hover:bg-[#E2B90F] text-[#0F172A] px-6 py-3 rounded-xl shadow transition duration-150 flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
               >

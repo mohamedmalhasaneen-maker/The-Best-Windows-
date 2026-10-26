@@ -49,6 +49,7 @@ interface MobileViewProps {
   handleSelectCustomer: (c: SavedCustomer) => void;
   handleSaveCustomerFromForm: () => Promise<void>;
   onDuplicateItem?: (item: CalculatedItem) => void;
+  isPrimaryHeading?: boolean;
 }
 
 export const MobileView: React.FC<MobileViewProps> = ({
@@ -77,6 +78,7 @@ export const MobileView: React.FC<MobileViewProps> = ({
   handleSelectCustomer,
   handleSaveCustomerFromForm,
   onDuplicateItem,
+  isPrimaryHeading = false,
 }) => {
   const handleNavigateToSection = (sectionId: string) => {
     setActiveMainTab('input');
@@ -108,6 +110,7 @@ export const MobileView: React.FC<MobileViewProps> = ({
         onOpenQr={onOpenQr}
         onSaveQuoteAuto={handleSaveQuoteAuto}
         onNavigateToSection={handleNavigateToSection}
+        isPrimaryHeading={isPrimaryHeading}
       />
 
       {/* Main Container */}

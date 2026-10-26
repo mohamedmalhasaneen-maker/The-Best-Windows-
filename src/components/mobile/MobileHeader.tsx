@@ -34,6 +34,7 @@ interface MobileHeaderProps {
   onOpenQr: () => void;
   onSaveQuoteAuto: () => void;
   onNavigateToSection?: (sectionId: string) => void;
+  isPrimaryHeading?: boolean;
 }
 
 export const MobileHeader: React.FC<MobileHeaderProps> = ({
@@ -47,6 +48,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
   onOpenQr,
   onSaveQuoteAuto,
   onNavigateToSection,
+  isPrimaryHeading = false,
 }) => {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
@@ -63,6 +65,8 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
     }, 2200);
   };
 
+  const BrandHeadingTag = isPrimaryHeading ? 'h1' : 'div';
+
   return (
     <>
       {/* Mobile Top App Bar */}
@@ -72,18 +76,19 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
           <div className="flex items-center gap-2.5 min-w-0">
             <img
               src={logoUrl}
-              alt={`${BRAND_NAME} Logo`}
+              alt={`${BRAND_NAME} - شبابيك وأبواب UPVC في مصر`}
               referrerPolicy="no-referrer"
               className="w-10 h-10 rounded-xl border border-[#F59E0B] object-cover shadow-sm shrink-0 bg-white"
             />
-            <div className="min-w-0">
+            <BrandHeadingTag className="min-w-0 m-0">
               <span className="font-black text-sm text-white font-display tracking-tight truncate block">
                 {BRAND_NAME}
               </span>
-              <p className="text-slate-300 text-[10px] font-bold truncate">
+              <span className="text-slate-300 text-[10px] font-bold font-sans truncate block">
                 أبواب وشبابيك UPVC & WPC
-              </p>
-            </div>
+              </span>
+              <span className="sr-only"> - توريد وتركيب في مصر</span>
+            </BrandHeadingTag>
           </div>
 
           {/* Quick Header Actions */}

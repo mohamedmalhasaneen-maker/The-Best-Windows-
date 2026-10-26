@@ -520,14 +520,14 @@ function A4PageSheet({
                 <div className="flex items-center gap-3.5">
                   <img
                     src={logoUrl}
-                    alt={`${BRAND_NAME} Logo`}
+                    alt={`${BRAND_NAME} - شبابيك وأبواب UPVC`}
                     className="w-16 h-16 rounded-2xl border-2 border-[#0F172A] object-cover bg-white shrink-0"
                     referrerPolicy="no-referrer"
                   />
                   <div className="min-w-0">
-                    <h1 className="text-[26px] leading-tight font-black font-display text-[#0F172A] tracking-tight">
+                    <div className="text-[26px] leading-tight font-black font-display text-[#0F172A] tracking-tight">
                       {BRAND_NAME}
-                    </h1>
+                    </div>
                     <p className="text-slate-500 font-bold text-[11px] mt-0.5">
                       ذا بيست ويندوز · توريد وتركيب شبابيك وأبواب الـ UPVC & WPC
                     </p>
