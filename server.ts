@@ -395,6 +395,35 @@ async function startServer() {
     }
   });
 
+  // Explicit SEO endpoints (/sitemap.xml & /robots.txt) so SPA catch-all never returns HTML for them
+  app.get("/sitemap.xml", (_req, res) => {
+    const candidates = [
+      path.join(process.cwd(), "dist", "sitemap.xml"),
+      path.join(process.cwd(), "public", "sitemap.xml"),
+    ];
+    for (const filePath of candidates) {
+      if (fs.existsSync(filePath)) {
+        res.status(200).type("application/xml; charset=utf-8").send(fs.readFileSync(filePath, "utf-8"));
+        return;
+      }
+    }
+    res.status(404).type("text/plain; charset=utf-8").send("Sitemap not found");
+  });
+
+  app.get("/robots.txt", (_req, res) => {
+    const candidates = [
+      path.join(process.cwd(), "dist", "robots.txt"),
+      path.join(process.cwd(), "public", "robots.txt"),
+    ];
+    for (const filePath of candidates) {
+      if (fs.existsSync(filePath)) {
+        res.status(200).type("text/plain; charset=utf-8").send(fs.readFileSync(filePath, "utf-8"));
+        return;
+      }
+    }
+    res.status(404).type("text/plain; charset=utf-8").send("robots.txt not found");
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
