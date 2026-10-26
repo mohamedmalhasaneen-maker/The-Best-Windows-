@@ -19,7 +19,7 @@ import { MobileSummaryBox } from './MobileSummaryBox';
 import DetailedQuoteView from '../DetailedQuoteView';
 import PricingTable from '../PricingTable';
 import Features from '../Features';
-import { BranchesSection, ContactSection, CompanyFooter } from '../CompanySections';
+import { CompanyFooter } from '../CompanySections';
 
 interface MobileViewProps {
   customer: CustomerInfo;
@@ -167,12 +167,10 @@ export const MobileView: React.FC<MobileViewProps> = ({
               onSaveQuoteAuto={handleSaveQuoteAuto}
             />
 
-            {/* Features, Official Branches & Factory, Contact Us & Unified Footer */}
+            {/* Features & Unified Footer */}
             <div className="pt-2">
               <Features />
-              <BranchesSection idPrefix="mobile-" />
-              <ContactSection idPrefix="mobile-" />
-              <CompanyFooter onOpenQr={onOpenQr} />
+              <CompanyFooter onOpenQr={onOpenQr} compact />
             </div>
           </div>
         ) : (

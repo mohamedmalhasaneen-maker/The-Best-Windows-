@@ -19,6 +19,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import logoUrl from '../../assets/images/the_best_windows_logo.jpeg';
 import { ContactSelectModal } from '../ContactSelectModal';
+import { LocationsSelectModal } from '../LocationsSelectModal';
 import { BRAND_NAME, COMPANY_CONTACTS, SOCIAL_CHANNELS } from '../../constants';
 import { renderSocialIcon, getSocialButtonStyle } from '../SocialIcons';
 
@@ -52,6 +53,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
   const [contactModalType, setContactModalType] = useState<'phone' | 'whatsapp' | 'all' | null>(
     null
   );
+  const [isLocationsModalOpen, setIsLocationsModalOpen] = useState(false);
 
   const handleAutoSave = () => {
     onSaveQuoteAuto();
@@ -59,17 +61,6 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
     setTimeout(() => {
       setJustSaved(false);
     }, 2200);
-  };
-
-  const handleJump = (sectionId: string) => {
-    setIsDrawerOpen(false);
-    if (onNavigateToSection) {
-      onNavigateToSection(sectionId);
-    } else {
-      setTimeout(() => {
-        document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth' });
-      }, 150);
-    }
   };
 
   return (
@@ -224,7 +215,10 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => handleJump('mobile-branches-section')}
+                    onClick={() => {
+                      setIsDrawerOpen(false);
+                      setIsLocationsModalOpen(true);
+                    }}
                     className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 text-white rounded-2xl font-black text-xs flex items-center justify-between border border-slate-700/60 transition cursor-pointer"
                   >
                     <div className="flex items-center gap-2.5">
@@ -236,7 +230,10 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => handleJump('mobile-contact-section')}
+                    onClick={() => {
+                      setIsDrawerOpen(false);
+                      setContactModalType('all');
+                    }}
                     className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 text-white rounded-2xl font-black text-xs flex items-center justify-between border border-slate-700/60 transition cursor-pointer"
                   >
                     <div className="flex items-center gap-2.5">
@@ -400,11 +397,15 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
         )}
       </AnimatePresence>
 
-      {/* Selection Modal */}
+      {/* Selection Modals */}
       <ContactSelectModal
         isOpen={!!contactModalType}
         type={contactModalType || 'phone'}
         onClose={() => setContactModalType(null)}
+      />
+      <LocationsSelectModal
+        isOpen={isLocationsModalOpen}
+        onClose={() => setIsLocationsModalOpen(false)}
       />
     </>
   );

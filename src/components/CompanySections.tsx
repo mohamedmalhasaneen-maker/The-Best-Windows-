@@ -244,12 +244,188 @@ export const ContactSection: React.FC<SectionProps> = ({ idPrefix = '' }) => {
 interface CompanyFooterProps {
   onOpenQr: () => void;
   compactLocations?: boolean;
+  compact?: boolean;
 }
 
 export const CompanyFooter: React.FC<CompanyFooterProps> = ({
   onOpenQr,
   compactLocations = false,
+  compact = false,
 }) => {
+  if (compact) {
+    return (
+      <footer
+        className="mt-4 bg-[#0F172A] text-white rounded-2xl p-3.5 print:hidden border border-slate-800 text-right"
+        dir="rtl"
+      >
+        <div className="space-y-3 pb-3 border-b border-slate-800">
+          {/* Section 1: Brand & Socials */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2.5">
+              <img
+                src={logoUrl}
+                alt={`${BRAND_NAME} Logo`}
+                referrerPolicy="no-referrer"
+                className="w-9 h-9 rounded-xl border border-[#F59E0B] object-cover bg-white shrink-0"
+              />
+              <div className="min-w-0">
+                <h3 className="text-sm font-display font-black text-white tracking-tight leading-tight">
+                  {BRAND_NAME}
+                </h3>
+                <p className="text-[10px] text-slate-400 font-bold leading-tight mt-0.5">
+                  أبواب وشبابيك UPVC & WPC المعتمدة
+                </p>
+              </div>
+            </div>
+
+            <p className="text-[10.5px] text-slate-300 leading-snug">
+              توريد وتصنيع وتركيب أنظمة الأبواب والشبابيك الـ UPVC و WPC بأعلى معايير العزل الحراري والصوتي وضمان معتمد.
+            </p>
+
+            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+              {SOCIAL_CHANNELS.map((social) => (
+                <a
+                  key={social.id}
+                  href={social.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={social.name}
+                  className={`px-2.5 py-1 rounded-lg text-[10.5px] font-bold inline-flex items-center gap-1 transition-all active:scale-95 whitespace-nowrap ${getSocialButtonStyle(
+                    social.id
+                  )}`}
+                >
+                  {renderSocialIcon(social.id, 12)}
+                  <span>{social.nameAr}</span>
+                </a>
+              ))}
+            </div>
+          </div>
+
+          {/* Section 2: Official Phones */}
+          <div className="space-y-1.5 pt-2.5 border-t border-slate-800/80">
+            <h4 className="text-[11px] font-black text-[#FACC15]">
+              مسؤولو التواصل والمبيعات
+            </h4>
+            <ul className="space-y-1">
+              {COMPANY_CONTACTS.map((contact) => (
+                <li
+                  key={contact.id}
+                  className="flex items-center justify-between gap-1.5 text-[11px] border-b border-slate-800/60 pb-1 last:border-none last:pb-0"
+                >
+                  <div className="min-w-0 flex flex-wrap items-baseline gap-x-1">
+                    <span className="font-bold text-white leading-tight">
+                      {contact.name}
+                    </span>
+                    {contact.role && (
+                      <span className="text-[9.5px] text-slate-400 leading-tight">
+                        · {contact.role}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <a
+                      href={contact.telUrl}
+                      className="font-mono tabular-nums text-[10.5px] font-bold text-[#FACC15] hover:underline px-1.5 py-0.5 rounded-md bg-slate-800/90"
+                      dir="ltr"
+                    >
+                      {contact.phone}
+                    </a>
+                    <a
+                      href={contact.whatsappUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={`واتساب ${contact.name}`}
+                      className="p-1 rounded-md bg-[#25D366]/20 hover:bg-[#25D366] text-[#25D366] hover:text-white transition-colors"
+                    >
+                      <MessageCircle size={12} />
+                    </a>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Section 3: Branches & Factory */}
+          <div className="space-y-1.5 pt-2.5 border-t border-slate-800/80">
+            <h4 className="text-[11px] font-black text-[#FACC15]">
+              الفروع والمعارض والمصنع
+            </h4>
+            <ul className="space-y-1.5">
+              {COMPANY_LOCATIONS.map((loc) => (
+                <li
+                  key={loc.id}
+                  className="border-b border-slate-800/60 pb-1.5 last:border-none last:pb-0 space-y-1"
+                >
+                  <div>
+                    <span className="font-bold text-[11px] text-white flex items-center gap-1 leading-tight">
+                      {loc.type === 'factory' ? (
+                        <Factory size={11} className="text-[#FACC15] shrink-0" />
+                      ) : (
+                        <MapPin size={11} className="text-[#FACC15] shrink-0" />
+                      )}
+                      <span>{loc.name}</span>
+                    </span>
+                    {loc.address && (
+                      <span className="text-[9.5px] text-slate-400 block mt-0.5 leading-tight">
+                        {loc.address}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1">
+                    <a
+                      href={loc.mapsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 rounded-md text-[9.5px] font-bold inline-flex items-center gap-1 transition-colors whitespace-nowrap"
+                    >
+                      <MapPin size={10} className="text-[#FACC15] shrink-0" />
+                      <span>عرض الموقع على الخريطة</span>
+                    </a>
+                    <a
+                      href={loc.directionsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2 py-0.5 bg-[#FACC15] hover:bg-[#F59E0B] text-slate-950 rounded-md text-[9.5px] font-black inline-flex items-center gap-1 transition-colors whitespace-nowrap"
+                    >
+                      <Navigation size={10} className="text-slate-950 shrink-0" />
+                      <span>الحصول على الاتجاهات</span>
+                    </a>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        {/* Bottom Legal & QR Row */}
+        <div className="pt-2.5 flex flex-col items-center gap-1.5 text-[10px] text-slate-400">
+          <div className="w-full flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[9.5px] font-bold text-slate-300">
+              © {new Date().getFullYear()} {BRAND_NAME} · جميع الحقوق محفوظة
+            </p>
+            <button
+              type="button"
+              onClick={onOpenQr}
+              className="px-2.5 py-1 bg-slate-800 hover:bg-[#FACC15] text-white hover:text-slate-950 border border-slate-700 hover:border-transparent transition-colors rounded-lg text-[10px] font-black inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+            >
+              <QrCode size={12} />
+              <span>رمز الاستجابة السريعة (QR)</span>
+            </button>
+          </div>
+
+          <div className="flex items-center justify-center gap-1.5 text-[9.5px] font-bold text-slate-300">
+            <span>خامات معتمدة</span>
+            <span aria-hidden="true">·</span>
+            <span>تركيب احترافي</span>
+            <span aria-hidden="true">·</span>
+            <span>معاينة مجانية</span>
+          </div>
+        </div>
+      </footer>
+    );
+  }
+
   return (
     <footer
       className="mt-16 sm:mt-20 bg-[#0F172A] text-white rounded-3xl p-6 sm:p-10 print:hidden border border-slate-800 text-right"

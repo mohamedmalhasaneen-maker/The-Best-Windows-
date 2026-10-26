@@ -1,6 +1,6 @@
 import { motion } from 'motion/react';
-import { X, ExternalLink, QrCode, Phone, MessageCircle } from 'lucide-react';
-import { BRAND_NAME, COMPANY_CONTACTS, SOCIAL_CHANNELS } from '../constants';
+import { X, ExternalLink, QrCode } from 'lucide-react';
+import { BRAND_NAME, SOCIAL_CHANNELS } from '../constants';
 import { renderSocialIcon, getSocialButtonStyle } from './SocialIcons';
 
 interface QrModalProps {
@@ -106,51 +106,6 @@ export default function QrModal({ isOpen, onClose }: QrModalProps) {
                 </div>
               );
             })}
-          </div>
-
-          {/* Direct Official Contacts Directory */}
-          <div className="pt-4 border-t border-slate-200 space-y-3">
-            <h5 className="text-sm font-black text-slate-900">
-              أرقام التواصل المباشر ومسؤولو الفروع
-            </h5>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {COMPANY_CONTACTS.map((contact, idx) => (
-                <div
-                  key={contact.id}
-                  className="p-3.5 rounded-2xl border border-slate-200 bg-white flex items-center justify-between gap-3"
-                >
-                  <div className="min-w-0">
-                    <span className="text-xs font-black text-slate-900 block truncate">
-                      {idx + 1}. {contact.name}
-                    </span>
-                    {contact.role && (
-                      <span className="text-[11px] text-slate-500 font-bold block truncate">
-                        {contact.role}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <a
-                      href={contact.telUrl}
-                      className="px-2.5 py-1.5 bg-[#0F172A] text-[#FACC15] rounded-xl font-mono tabular-nums font-bold text-xs flex items-center gap-1"
-                      dir="ltr"
-                    >
-                      <Phone size={12} />
-                      <span>{contact.phone}</span>
-                    </a>
-                    <a
-                      href={contact.whatsappUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      aria-label={`واتساب ${contact.name}`}
-                      className="p-2 bg-[#25D366] text-white rounded-xl hover:bg-[#20ba5a] transition-colors"
-                    >
-                      <MessageCircle size={14} />
-                    </a>
-                  </div>
-                </div>
-              ))}
-            </div>
           </div>
         </div>
 
