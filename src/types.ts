@@ -26,6 +26,8 @@ export interface Profile {
   id: string;
   name: string;
   price: number;
+  isFlat?: boolean;
+  unit?: string;
 }
 
 export interface Addon {
@@ -56,8 +58,18 @@ export interface CalculatedItem extends QuoteItem {
   area: number;
   itemTotal: number;
   profilePrice: number;
+  flatProfilePrice?: number;
   addonsPrice: number;
   flatAddonsPrice?: number;
+}
+
+export interface PricingConfig {
+  profiles: Record<string, Profile>;
+  addons: Record<string, Addon>;
+  profileOrder: string[];
+  addonOrder: string[];
+  version: number;
+  updatedAt: string;
 }
 
 export interface SavedQuote {
@@ -65,6 +77,10 @@ export interface SavedQuote {
   name: string;
   customer: CustomerInfo;
   items: QuoteItem[];
+  pricingSnapshot?: {
+    profiles: Record<string, Profile>;
+    addons: Record<string, Addon>;
+  };
   date: string;
   totalPrice: number;
 }

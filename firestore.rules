@@ -6,8 +6,91 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn()
+        && request.auth.token.email == 'mohamed.m.alhasaneen@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
     function isValidDocId(id) {
-      return id is string && id.size() >= 1 && id.size() <= 256;
+      return id is string
+        && id.size() >= 1
+        && id.size() <= 256
+        && id.matches('^[a-zA-Z0-9_%\\-]+$');
+    }
+
+    function isValidAdminGate(data) {
+      return data.keys().hasAll(['proof', 'verifiedAt'])
+        && data.keys().hasOnly(['proof', 'verifiedAt'])
+        && data.proof is string
+        && data.proof.size() == 64
+        && data.proof.matches('^[0-9a-f]{64}$')
+        && data.verifiedAt == request.time;
+    }
+
+    function hasValidPasscodeProof(data) {
+      return hashing.sha256(('tbw_server_v1:' + data.proof).toUtf8()).toHexString().lower()
+        == '8a9e3dc7be58f77496053e814b883e4a8a45876771c9e71fdb8a08f8116e2486';
+    }
+
+    function isValidPricingConfig(data) {
+      return data.keys().hasAll([
+          'profiles',
+          'addons',
+          'profileOrder',
+          'addonOrder',
+          'version',
+          'updatedAt',
+          'serverUpdatedAt'
+        ])
+        && data.keys().hasOnly([
+          'profiles',
+          'addons',
+          'profileOrder',
+          'addonOrder',
+          'version',
+          'updatedAt',
+          'serverUpdatedAt'
+        ])
+        && data.profiles is map
+        && data.profiles.size() >= 1
+        && data.profiles.size() <= 200
+        && data.addons is map
+        && data.addons.size() <= 200
+        && data.profileOrder is list
+        && data.profileOrder.size() >= 1
+        && data.profileOrder.size() <= 200
+        && data.profileOrder[0] is string
+        && data.profileOrder[0].size() >= 1
+        && data.profileOrder[0].size() <= 128
+        && data.addonOrder is list
+        && data.addonOrder.size() <= 200
+        && (
+          data.addonOrder.size() == 0
+          || (
+            data.addonOrder[0] is string
+            && data.addonOrder[0].size() >= 1
+            && data.addonOrder[0].size() <= 128
+          )
+        )
+        && data.version is int
+        && data.version >= 1
+        && data.updatedAt is string
+        && data.updatedAt.size() >= 1
+        && data.updatedAt.size() <= 100
+        && data.serverUpdatedAt == request.time;
     }
 
     function isValidQuote(data) {
@@ -17,6 +100,7 @@ service cloud.firestore {
           'name',
           'customer',
           'items',
+          'pricingSnapshot',
           'date',
           'totalPrice',
           'updatedAt',
@@ -28,7 +112,9 @@ service cloud.firestore {
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 500
         && data.customer is map && data.customer.size() <= 30
         && data.items is list && data.items.size() <= 500
+        && (data.items.size() == 0 || data.items[0] is map)
         && data.totalPrice is number && data.totalPrice >= 0
+        && (!('pricingSnapshot' in data) || (data.pricingSnapshot is map && data.pricingSnapshot.size() <= 10))
         && (!('date' in data) || (data.date is string && data.date.size() <= 100))
         && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 100))
         && (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 100))
@@ -61,17 +147,86 @@ service cloud.firestore {
     // Connection health check endpoint used on boot
     match /test/connection {
       allow get: if true;
+      allow list, write: if false;
+    }
+
+    // Write-only cryptographic admin verification gate (unreadable by all clients)
+    match /admin_gate/{gateId} {
+      allow read, delete: if false;
+      allow create: if gateId in ['auth_check', 'pricing_write']
+        && isValidAdminGate(incoming())
+        && (isBootstrappedAdmin() || hasValidPasscodeProof(incoming()));
+      allow update: if gateId in ['auth_check', 'pricing_write']
+        && isValidAdminGate(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['proof', 'verifiedAt'])
+        && (isBootstrappedAdmin() || hasValidPasscodeProof(incoming()));
+    }
+
+    // Authoritative shared pricing catalog read by all visitors, writable only via atomic admin gate
+    match /settings/pricing {
+      allow get: if true;
+      allow list: if false;
+      allow create: if isValidPricingConfig(incoming())
+        && (
+          isBootstrappedAdmin()
+          || getAfter(/databases/$(database)/documents/admin_gate/pricing_write).data.verifiedAt == request.time
+        );
+      allow update: if isValidPricingConfig(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'profiles',
+          'addons',
+          'profileOrder',
+          'addonOrder',
+          'version',
+          'updatedAt',
+          'serverUpdatedAt'
+        ])
+        && incoming().version > existing().version
+        && (
+          isBootstrappedAdmin()
+          || getAfter(/databases/$(database)/documents/admin_gate/pricing_write).data.verifiedAt == request.time
+        );
+      allow delete: if false;
     }
 
     match /quotes/{quoteId} {
-      allow get, list: if true;
-      allow create, update: if isValidDocId(quoteId) && isValidQuote(request.resource.data);
+      allow get: if isValidDocId(quoteId);
+      allow list: if true;
+      allow create: if isValidDocId(quoteId) && isValidQuote(incoming());
+      allow update: if isValidQuote(incoming())
+        && isValidDocId(quoteId)
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'id',
+          'name',
+          'customer',
+          'items',
+          'pricingSnapshot',
+          'date',
+          'totalPrice',
+          'updatedAt',
+          'serverUpdatedAt',
+          'createdAt',
+          'discountPercentage'
+        ]);
       allow delete: if isValidDocId(quoteId);
     }
 
     match /customers/{customerId} {
-      allow get, list: if true;
-      allow create, update: if isValidDocId(customerId) && isValidCustomer(request.resource.data);
+      allow get: if isValidDocId(customerId);
+      allow list: if true;
+      allow create: if isValidDocId(customerId) && isValidCustomer(incoming());
+      allow update: if isValidCustomer(incoming())
+        && isValidDocId(customerId)
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'id',
+          'name',
+          'phone',
+          'address',
+          'notes',
+          'createdAt',
+          'updatedAt',
+          'serverUpdatedAt'
+        ]);
       allow delete: if isValidDocId(customerId);
     }
   }

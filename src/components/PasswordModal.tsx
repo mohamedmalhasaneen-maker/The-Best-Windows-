@@ -1,38 +1,48 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Lock, AlertCircle, KeyRound, CheckCircle2 } from 'lucide-react';
+import { X, Lock, AlertCircle, KeyRound, CheckCircle2, Loader2 } from 'lucide-react';
+import { verifyAdminPasscode } from '../firebase';
 
 interface PasswordModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
-  requiredPassword?: string;
 }
 
 export default function PasswordModal({
   isOpen,
   onClose,
   onSuccess,
-  requiredPassword = '662006'
 }: PasswordModalProps) {
   const [password, setPassword] = useState('');
-  const [error, setError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
   const [success, setSuccess] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (password === requiredPassword) {
-      setError(false);
+    if (verifying || success || !password.trim()) return;
+
+    setVerifying(true);
+    setErrorMessage(null);
+
+    const result = await verifyAdminPasscode(password);
+    setVerifying(false);
+
+    if (result.ok) {
+      setErrorMessage(null);
       setSuccess(true);
       setTimeout(() => {
         setPassword('');
         setSuccess(false);
         onSuccess();
-      }, 600);
+      }, 450);
+    } else if (result.errorType === 'network') {
+      setErrorMessage('تعذر الاتصال بقاعدة البيانات للتحقق من الرمز السري. تحقق من الإنترنت وحاول مرة أخرى.');
     } else {
-      setError(true);
+      setErrorMessage('كلمة المرور غير صحيحة، يرجى المحاولة مرة أخرى');
       setPassword('');
     }
   };
@@ -44,7 +54,7 @@ export default function PasswordModal({
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        onClick={onClose}
+        onClick={verifying ? undefined : onClose}
         className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm cursor-pointer"
       />
 
@@ -62,8 +72,10 @@ export default function PasswordModal({
             <span className="font-black text-slate-800 text-sm">قسم محمي بكلمة مرور</span>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition"
+            disabled={verifying}
+            className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition disabled:opacity-50"
           >
             <X size={18} />
           </button>
@@ -82,23 +94,24 @@ export default function PasswordModal({
               type="password"
               placeholder="••••••"
               value={password}
+              disabled={verifying || success}
               onChange={(e) => {
                 setPassword(e.target.value);
-                setError(false);
+                setErrorMessage(null);
               }}
               autoFocus
-              className="w-full p-3 text-center tracking-widest text-lg bg-slate-50 border-2 border-slate-200 rounded-xl focus:ring-2 focus:ring-[#FACC15] focus:border-[#0F172A] outline-none transition-all font-mono font-black"
+              className="w-full p-3 text-center tracking-widest text-lg bg-slate-50 border-2 border-slate-200 rounded-xl focus:ring-2 focus:ring-[#FACC15] focus:border-[#0F172A] outline-none transition-all font-mono font-black disabled:opacity-60"
             />
           </div>
 
-          {error && (
+          {errorMessage && (
             <motion.div
               initial={{ opacity: 0, y: -5 }}
               animate={{ opacity: 1, y: 0 }}
-              className="flex items-center gap-2 text-rose-600 text-xs font-bold justify-center"
+              className="flex items-center gap-2 text-rose-600 text-xs font-bold justify-center text-center"
             >
-              <AlertCircle size={14} />
-              <span>كلمة المرور غير صحيحة، يرجى المحاولة مرة أخرى</span>
+              <AlertCircle size={14} className="shrink-0" />
+              <span>{errorMessage}</span>
             </motion.div>
           )}
 
@@ -115,10 +128,17 @@ export default function PasswordModal({
 
           <button
             type="submit"
-            disabled={success}
-            className="w-full py-3 bg-[#0F172A] hover:bg-black text-white rounded-xl font-black text-xs transition duration-200 active:scale-95 cursor-pointer shadow-md"
+            disabled={verifying || success || !password.trim()}
+            className="w-full py-3 bg-[#0F172A] hover:bg-black disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl font-black text-xs transition duration-200 active:scale-95 cursor-pointer shadow-md flex items-center justify-center gap-2"
           >
-            تأكيد الدخول
+            {verifying ? (
+              <>
+                <Loader2 size={15} className="animate-spin" />
+                <span>جاري التحقق...</span>
+              </>
+            ) : (
+              <span>تأكيد الدخول</span>
+            )}
           </button>
         </form>
       </motion.div>

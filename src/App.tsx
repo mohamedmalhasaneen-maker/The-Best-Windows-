@@ -1,20 +1,32 @@
-import { useState, useMemo, useEffect } from 'react';
-import { Plus, Calculator, QrCode, FileText } from 'lucide-react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { Plus, Calculator, QrCode, FileText, AlertTriangle, RefreshCw, History } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-import { QuoteItem, CalculationResult, CustomerInfo, Profile, Addon, SavedQuote, SavedCustomer } from './types';
+import {
+  QuoteItem,
+  CalculationResult,
+  CustomerInfo,
+  Profile,
+  Addon,
+  SavedQuote,
+  SavedCustomer,
+  PricingConfig,
+} from './types';
 import { PROFILES, ADDONS, BRAND_NAME } from './constants';
 import { DevSettingsModal } from './components/DevSettingsModal';
-import { 
-  saveQuoteToCloud, 
-  fetchQuotesFromCloud, 
-  deleteQuoteFromCloud, 
+import {
+  saveQuoteToCloud,
+  fetchQuotesFromCloud,
+  deleteQuoteFromCloud,
   subscribeToQuotes,
   saveCustomerToCloud,
   fetchCustomersFromCloud,
   deleteCustomerFromCloud,
   subscribeToCustomers,
-  normalizePhoneNumber
+  normalizePhoneNumber,
+  fetchPricingFromCloud,
+  subscribeToPricing,
+  savePricingToCloud,
 } from './firebase';
 
 import Header from './components/Header';
@@ -31,9 +43,11 @@ import PasswordModal from './components/PasswordModal';
 import { MobileView } from './components/mobile/MobileView';
 
 const formatCurrency = (value: number) => {
-  return new Intl.NumberFormat('en-US', { 
-    maximumFractionDigits: 0 
-  }).format(value) + ' ج.م';
+  return (
+    new Intl.NumberFormat('en-US', {
+      maximumFractionDigits: 0,
+    }).format(value) + ' ج.م'
+  );
 };
 
 export default function App() {
@@ -62,6 +76,133 @@ export default function App() {
     }
   });
 
+  // Authoritative shared pricing state (loaded strictly from Firestore, never from localStorage)
+  const [profiles, setProfiles] = useState<Record<string, Profile>>(PROFILES);
+  const [addons, setAddons] = useState<Record<string, Addon>>(ADDONS);
+  const pricingVersionRef = useRef<number>(0);
+  const [pricingSyncStatus, setPricingSyncStatus] = useState<'loading' | 'synced' | 'error'>(
+    'loading'
+  );
+  const [pricingErrorText, setPricingErrorText] = useState<string | null>(null);
+
+  // Preserves historical saved quote prices when viewing a previously saved quotation
+  const [loadedQuotePricing, setLoadedQuotePricing] = useState<{
+    quoteName: string;
+    profiles: Record<string, Profile>;
+    addons: Record<string, Addon>;
+  } | null>(null);
+  const loadedQuotePricingRef = useRef(loadedQuotePricing);
+  useEffect(() => {
+    loadedQuotePricingRef.current = loadedQuotePricing;
+  }, [loadedQuotePricing]);
+
+  const effectiveProfiles = loadedQuotePricing ? loadedQuotePricing.profiles : profiles;
+  const effectiveAddons = loadedQuotePricing ? loadedQuotePricing.addons : addons;
+
+  const [customer, setCustomer] = useState<CustomerInfo>({
+    name: '',
+    phone: '',
+    address: '',
+    date: new Date().toISOString().split('T')[0],
+    deliveryDate: '',
+    discountType: 'cash',
+    discountValue: 0,
+    notes: '',
+    notesAmount: 0,
+    additionalNotes: [],
+  });
+
+  const [items, setItems] = useState<QuoteItem[]>(() => {
+    const initialProfile = Object.keys(PROFILES)[0] || 'newline';
+    return [
+      {
+        id: Date.now(),
+        title: 'بند رقم 1 (مثال: شباك غرفه)',
+        itemType: 'window',
+        width: 120,
+        height: 120,
+        profile: initialProfile,
+        opening: 'جرار',
+        innerType: 'glass',
+        glassType: 'أبيض شفاف',
+        addons: [],
+        quantity: 1,
+      },
+    ];
+  });
+
+  const applyConfirmedPricing = useCallback((config: PricingConfig) => {
+    if (config.version < pricingVersionRef.current) {
+      return;
+    }
+    pricingVersionRef.current = config.version;
+    setProfiles(config.profiles);
+    setAddons(config.addons);
+    setPricingSyncStatus('synced');
+    setPricingErrorText(null);
+
+    // Keep active draft items valid if a profile or addon was removed, unless viewing a historical quote snapshot
+    if (!loadedQuotePricingRef.current) {
+      const fallbackProfile = Object.keys(config.profiles)[0] || 'newline';
+      setItems((prev) =>
+        prev.map((item) => ({
+          ...item,
+          profile: config.profiles[item.profile] ? item.profile : fallbackProfile,
+          addons: item.addons.filter((addonId) => Boolean(config.addons[addonId])),
+        }))
+      );
+    }
+  }, []);
+
+  const loadLatestPricingFromServer = useCallback(async () => {
+    setPricingSyncStatus((prev) => (prev === 'synced' ? 'synced' : 'loading'));
+    try {
+      const cloudPricing = await fetchPricingFromCloud();
+      if (cloudPricing) {
+        applyConfirmedPricing(cloudPricing);
+      } else {
+        setPricingSyncStatus('synced');
+        setPricingErrorText(null);
+      }
+    } catch (err) {
+      console.error('Failed to fetch authoritative pricing from Firestore:', err);
+      if (pricingVersionRef.current === 0) {
+        setPricingSyncStatus('error');
+        setPricingErrorText(
+          'تعذر الاتصال بقاعدة البيانات لتحميل أحدث الأسعار المعتمدة — الأسعار الاحتياطية المعروضة حالياً غير مؤكدة.'
+        );
+      }
+    }
+  }, [applyConfirmedPricing]);
+
+  useEffect(() => {
+    // Purge legacy browser-local pricing overrides so localStorage can never shadow shared database prices
+    try {
+      localStorage.removeItem('almekawy_custom_profiles');
+      localStorage.removeItem('almekawy_custom_addons');
+    } catch {}
+
+    loadLatestPricingFromServer();
+
+    const unsubscribePricing = subscribeToPricing(
+      (livePricing) => {
+        applyConfirmedPricing(livePricing);
+      },
+      () => {
+        if (pricingVersionRef.current === 0) {
+          setPricingSyncStatus('error');
+          setPricingErrorText(
+            'تعذر الاتصال بقاعدة البيانات لتحميل أحدث الأسعار المعتمدة — الأسعار الاحتياطية المعروضة حالياً غير مؤكدة.'
+          );
+        }
+      }
+    );
+
+    return () => {
+      if (typeof unsubscribePricing === 'function') unsubscribePricing();
+    };
+  }, [applyConfirmedPricing, loadLatestPricingFromServer]);
+
   const fetchCustomersFromAllSources = async () => {
     try {
       const cloudCust = await fetchCustomersFromCloud();
@@ -73,12 +214,12 @@ export default function App() {
         return;
       }
     } catch (err) {
-      console.warn("Cloud customers fetch fallback:", err);
+      console.warn('Cloud customers fetch fallback:', err);
     }
 
     fetch('/api/customers')
-      .then(res => res.json())
-      .then(data => {
+      .then((res) => res.json())
+      .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
           setSavedCustomers(data);
           try {
@@ -86,8 +227,8 @@ export default function App() {
           } catch (e) {}
         }
       })
-      .catch(err => {
-        console.warn("Error loading customers from backend:", err);
+      .catch((err) => {
+        console.warn('Error loading customers from backend:', err);
       });
   };
 
@@ -95,9 +236,11 @@ export default function App() {
     if (!Array.isArray(quotes) || quotes.length === 0) return;
     const existingList = currentCustList || savedCustomers;
     const knownKeys = new Set(
-      existingList.map(c => {
+      existingList.map((c) => {
         const cleanDigits = normalizePhoneNumber(c.phone);
-        return cleanDigits.length >= 7 ? `phone_${cleanDigits}` : `name_${c.name.trim().toLowerCase()}`;
+        return cleanDigits.length >= 7
+          ? `phone_${cleanDigits}`
+          : `name_${c.name.trim().toLowerCase()}`;
       })
     );
 
@@ -107,8 +250,9 @@ export default function App() {
         const custPhone = (q.customer.phone || '').trim();
         const custAddress = (q.customer.address || '').trim();
         const cleanDigits = normalizePhoneNumber(custPhone);
-        const key = cleanDigits.length >= 7 ? `phone_${cleanDigits}` : `name_${custName.toLowerCase()}`;
-        
+        const key =
+          cleanDigits.length >= 7 ? `phone_${cleanDigits}` : `name_${custName.toLowerCase()}`;
+
         if (!knownKeys.has(key)) {
           knownKeys.add(key);
           saveCustomerToCloud({
@@ -133,13 +277,13 @@ export default function App() {
         return;
       }
     } catch (err) {
-      console.warn("Cloud quotes fetch fallback:", err);
+      console.warn('Cloud quotes fetch fallback:', err);
     }
 
     // Fallback to local server API if cloud is empty or during offline transitions
     fetch('/api/quotes')
-      .then(res => res.json())
-      .then(data => {
+      .then((res) => res.json())
+      .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
           setSavedQuotes(data);
           syncCustomersFromQuotesList(data);
@@ -148,8 +292,8 @@ export default function App() {
           } catch (e) {}
         }
       })
-      .catch(err => {
-        console.error("Error loading quotes from server:", err);
+      .catch((err) => {
+        console.error('Error loading quotes from server:', err);
       });
   };
 
@@ -228,82 +372,37 @@ export default function App() {
     return () => mq.removeEventListener('change', handleChange);
   }, []);
 
-  const [profiles, setProfiles] = useState<Record<string, Profile>>(() => {
-    try {
-      const saved = localStorage.getItem('almekawy_custom_profiles');
-      return saved ? JSON.parse(saved) : PROFILES;
-    } catch (e) {
-      return PROFILES;
-    }
-  });
+  const handleSavePrices = async (
+    updatedProfiles: Record<string, Profile>,
+    updatedAddons: Record<string, Addon>,
+    adminProof: string
+  ): Promise<PricingConfig> => {
+    const confirmedConfig = await savePricingToCloud(updatedProfiles, updatedAddons, adminProof);
+    applyConfirmedPricing(confirmedConfig);
+    return confirmedConfig;
+  };
 
-  const [addons, setAddons] = useState<Record<string, Addon>>(() => {
-    try {
-      const saved = localStorage.getItem('almekawy_custom_addons');
-      return saved ? JSON.parse(saved) : ADDONS;
-    } catch (e) {
-      return ADDONS;
-    }
-  });
+  const handleResetPrices = async (adminProof: string): Promise<PricingConfig> => {
+    const confirmedConfig = await savePricingToCloud(PROFILES, ADDONS, adminProof);
+    applyConfirmedPricing(confirmedConfig);
+    return confirmedConfig;
+  };
 
-  const handleSavePrices = (updatedProfiles: Record<string, Profile>, updatedAddons: Record<string, Addon>) => {
-    setProfiles(updatedProfiles);
-    setAddons(updatedAddons);
-    localStorage.setItem('almekawy_custom_profiles', JSON.stringify(updatedProfiles));
-    localStorage.setItem('almekawy_custom_addons', JSON.stringify(updatedAddons));
-
-    const fallbackProfile = Object.keys(updatedProfiles)[0] || 'newline';
+  const switchLoadedQuoteToLivePricing = () => {
+    setLoadedQuotePricing(null);
+    const fallbackProfile = Object.keys(profiles)[0] || 'newline';
     setItems((prev) =>
       prev.map((item) => ({
         ...item,
-        profile: updatedProfiles[item.profile] ? item.profile : fallbackProfile,
-        addons: item.addons.filter((addonId) => Boolean(updatedAddons[addonId])),
+        profile: profiles[item.profile] ? item.profile : fallbackProfile,
+        addons: item.addons.filter((addonId) => Boolean(addons[addonId])),
       }))
     );
   };
 
-  const handleResetPrices = () => {
-    setProfiles(PROFILES);
-    setAddons(ADDONS);
-    localStorage.removeItem('almekawy_custom_profiles');
-    localStorage.removeItem('almekawy_custom_addons');
-  };
-
-  const [customer, setCustomer] = useState<CustomerInfo>({
-    name: '',
-    phone: '',
-    address: '',
-    date: new Date().toISOString().split('T')[0],
-    deliveryDate: '',
-    discountType: 'cash',
-    discountValue: 0,
-    notes: '',
-    notesAmount: 0,
-    additionalNotes: []
-  });
-
-  const [items, setItems] = useState<QuoteItem[]>(() => {
-    const initialProfile = Object.keys(profiles)[0] || 'newline';
-    return [
-      {
-        id: Date.now(),
-        title: 'بند رقم 1 (مثال: شباك غرفه)',
-        itemType: 'window',
-        width: 120,
-        height: 120,
-        profile: initialProfile,
-        opening: 'جرار',
-        innerType: 'glass',
-        glassType: 'أبيض شفاف',
-        addons: [],
-        quantity: 1
-      }
-    ];
-  });
-
   const addNewItem = () => {
     setActiveMainTab('input');
-    const defaultProfile = Object.keys(profiles)[0] || 'newline';
+    const defaultProfile = Object.keys(effectiveProfiles)[0] || 'newline';
     setItems([
       ...items,
       {
@@ -317,8 +416,8 @@ export default function App() {
         innerType: 'glass',
         glassType: 'أبيض شفاف',
         addons: [],
-        quantity: 1
-      }
+        quantity: 1,
+      },
     ]);
   };
 
@@ -330,166 +429,175 @@ export default function App() {
       id: newId,
       title: `${itemToDuplicate.title} (نسخة)`,
     };
-    setItems(prev => [...prev, newItem]);
+    setItems((prev) => [...prev, newItem]);
   };
 
   const removeItem = (id: number) => {
-    setItems(prev => {
-      const remaining = prev.filter(item => item.id !== id);
+    setItems((prev) => {
+      const remaining = prev.filter((item) => item.id !== id);
       if (remaining.length === 0) {
-        const defaultProfile = Object.keys(profiles)[0] || 'newline';
+        const defaultProfile = Object.keys(effectiveProfiles)[0] || 'newline';
         // If all items removed, reset with 1 default window item
-        return [{
-          id: Date.now(),
-          title: 'شباك 1',
-          itemType: 'window',
-          width: 100,
-          height: 100,
-          profile: defaultProfile,
-          opening: 'جرار',
-          innerType: 'double',
-          glassType: 'شفاف 6 مم',
-          addons: [],
-          quantity: 1
-        }];
+        return [
+          {
+            id: Date.now(),
+            title: 'شباك 1',
+            itemType: 'window',
+            width: 100,
+            height: 100,
+            profile: defaultProfile,
+            opening: 'جرار',
+            innerType: 'glass',
+            glassType: 'أبيض شفاف',
+            addons: [],
+            quantity: 1,
+          },
+        ];
       }
       return remaining;
     });
   };
 
   const updateItem = (id: number, field: string, value: any) => {
-    setItems(items.map(item => {
-      if (item.id === id) {
-        let updatedItem = { ...item, [field]: value };
-        
-        // Logical constraints when switching item type
-        if (field === 'itemType') {
-          let newAddons = [...item.addons];
-          if (value === 'window') {
-            // Remove balcony items
-            newAddons = newAddons.filter(id => id !== 'skewBalcony1' && id !== 'skewBalcony2');
-          } else if (value === 'balcony') {
-            // Remove window items
-            newAddons = newAddons.filter(id => id !== 'skewWindow1' && id !== 'skewWindow2');
-          } else if (value === 'door') {
-            // Remove tilt-and-turn (skew) additions, double handle, and pombe
-            newAddons = newAddons.filter(id => 
-              id !== 'skewWindow1' && 
-              id !== 'skewWindow2' && 
-              id !== 'skewBalcony1' && 
-              id !== 'skewBalcony2' && 
-              id !== 'doubleHandle' && 
-              id !== 'pombe'
-            );
-          }
-          updatedItem.addons = newAddons;
-        }
+    setItems(
+      items.map((item) => {
+        if (item.id === id) {
+          const updatedItem = { ...item, [field]: value };
 
-        // Logical constraints when switching opening mechanism & sash counts (hingePanes)
-        if (field === 'opening') {
-          if (value !== 'مفصلي') {
-            updatedItem.addons = item.addons.filter(id => 
-              id !== 'skewWindow1' && 
-              id !== 'skewWindow2' && 
-              id !== 'skewBalcony1' && 
-              id !== 'skewBalcony2'
-            );
-          } else {
-            const currentHinge = item.hingePanes || 'ضلفة';
-            if (currentHinge === 'ضلفة') {
-              updatedItem.addons = item.addons.filter(id => 
-                id !== 'skewWindow2' && 
-                id !== 'skewBalcony2' && 
-                id !== 'doubleHandle'
+          // Logical constraints when switching item type
+          if (field === 'itemType') {
+            let newAddons = [...item.addons];
+            if (value === 'window') {
+              // Remove balcony items
+              newAddons = newAddons.filter(
+                (aid) => aid !== 'skewBalcony1' && aid !== 'skewBalcony2'
               );
-            } else if (currentHinge === 'ضلفتين') {
-              updatedItem.addons = item.addons.filter(id => 
-                id !== 'skewWindow1' && 
-                id !== 'skewBalcony1'
+            } else if (value === 'balcony') {
+              // Remove window items
+              newAddons = newAddons.filter((aid) => aid !== 'skewWindow1' && aid !== 'skewWindow2');
+            } else if (value === 'door') {
+              // Remove tilt-and-turn (skew) additions, double handle, and pombe
+              newAddons = newAddons.filter(
+                (aid) =>
+                  aid !== 'skewWindow1' &&
+                  aid !== 'skewWindow2' &&
+                  aid !== 'skewBalcony1' &&
+                  aid !== 'skewBalcony2' &&
+                  aid !== 'doubleHandle' &&
+                  aid !== 'pombe'
               );
-            }
-          }
-        }
-
-        if (field === 'hingePanes') {
-          if (item.opening === 'مفصلي') {
-            if (value === 'ضلفة') {
-              updatedItem.addons = item.addons.filter(id => 
-                id !== 'skewWindow2' && 
-                id !== 'skewBalcony2' && 
-                id !== 'doubleHandle'
-              );
-            } else if (value === 'ضلفتين') {
-              updatedItem.addons = item.addons.filter(id => 
-                id !== 'skewWindow1' && 
-                id !== 'skewBalcony1'
-              );
-            }
-          }
-        }
-
-        // Logical constraints for innerType (Panel vs Glass)
-        if (field === 'innerType') {
-          if (value === 'panel') {
-            // Remove glass-related addons when Panel Only is selected
-            updatedItem.addons = item.addons.filter(id => id !== 'doubleGlass' && id !== 'colorGlass');
-            updatedItem.glassType = 'بدون زجاج (بنل فقط)';
-          } else if ((value === 'glass' || value === 'panel_glass') && item.glassType === 'بدون زجاج (بنل فقط)') {
-            updatedItem.glassType = 'أبيض شفاف';
-          }
-        }
-        
-        // Logical constraints for add-ons
-        if (field === 'addons') {
-            const newAddons = [...value];
-            if (value.includes('blackout') && item.addons.indexOf('blackout') === -1) {
-                const index = newAddons.indexOf('pleated');
-                if (index > -1) newAddons.splice(index, 1);
-            }
-            if (value.includes('pleated') && item.addons.indexOf('pleated') === -1) {
-                 const index = newAddons.indexOf('blackout');
-                 if (index > -1) newAddons.splice(index, 1);
-            }
-            if (value.includes('doubleGlass') && item.addons.indexOf('doubleGlass') === -1) {
-                 const index = newAddons.indexOf('colorGlass');
-                 if (index > -1) newAddons.splice(index, 1);
-            }
-            if (value.includes('colorGlass') && item.addons.indexOf('colorGlass') === -1) {
-                 const index = newAddons.indexOf('doubleGlass');
-                 if (index > -1) newAddons.splice(index, 1);
-            }
-            if (value.includes('skewWindow1') && item.addons.indexOf('skewWindow1') === -1) {
-                 const index = newAddons.indexOf('skewWindow2');
-                 if (index > -1) newAddons.splice(index, 1);
-            }
-            if (value.includes('skewWindow2') && item.addons.indexOf('skewWindow2') === -1) {
-                 const index = newAddons.indexOf('skewWindow1');
-                 if (index > -1) newAddons.splice(index, 1);
-            }
-            if (value.includes('skewBalcony1') && item.addons.indexOf('skewBalcony1') === -1) {
-                 const index = newAddons.indexOf('skewBalcony2');
-                 if (index > -1) newAddons.splice(index, 1);
-            }
-            if (value.includes('skewBalcony2') && item.addons.indexOf('skewBalcony2') === -1) {
-                 const index = newAddons.indexOf('skewBalcony1');
-                 if (index > -1) newAddons.splice(index, 1);
             }
             updatedItem.addons = newAddons;
-        }
+          }
 
-        return updatedItem;
-      }
-      return item;
-    }));
+          // Logical constraints when switching opening mechanism & sash counts (hingePanes)
+          if (field === 'opening') {
+            if (value !== 'مفصلي') {
+              updatedItem.addons = item.addons.filter(
+                (aid) =>
+                  aid !== 'skewWindow1' &&
+                  aid !== 'skewWindow2' &&
+                  aid !== 'skewBalcony1' &&
+                  aid !== 'skewBalcony2'
+              );
+            } else {
+              const currentHinge = item.hingePanes || 'ضلفة';
+              if (currentHinge === 'ضلفة') {
+                updatedItem.addons = item.addons.filter(
+                  (aid) =>
+                    aid !== 'skewWindow2' && aid !== 'skewBalcony2' && aid !== 'doubleHandle'
+                );
+              } else if (currentHinge === 'ضلفتين') {
+                updatedItem.addons = item.addons.filter(
+                  (aid) => aid !== 'skewWindow1' && aid !== 'skewBalcony1'
+                );
+              }
+            }
+          }
+
+          if (field === 'hingePanes') {
+            if (item.opening === 'مفصلي') {
+              if (value === 'ضلفة') {
+                updatedItem.addons = item.addons.filter(
+                  (aid) =>
+                    aid !== 'skewWindow2' && aid !== 'skewBalcony2' && aid !== 'doubleHandle'
+                );
+              } else if (value === 'ضلفتين') {
+                updatedItem.addons = item.addons.filter(
+                  (aid) => aid !== 'skewWindow1' && aid !== 'skewBalcony1'
+                );
+              }
+            }
+          }
+
+          // Logical constraints for innerType (Panel vs Glass)
+          if (field === 'innerType') {
+            if (value === 'panel') {
+              // Remove glass-related addons when Panel Only is selected
+              updatedItem.addons = item.addons.filter(
+                (aid) => aid !== 'doubleGlass' && aid !== 'colorGlass'
+              );
+              updatedItem.glassType = 'بدون زجاج (بنل فقط)';
+            } else if (
+              (value === 'glass' || value === 'panel_glass') &&
+              item.glassType === 'بدون زجاج (بنل فقط)'
+            ) {
+              updatedItem.glassType = 'أبيض شفاف';
+            }
+          }
+
+          // Logical constraints for add-ons
+          if (field === 'addons') {
+            const newAddons = [...value];
+            if (value.includes('blackout') && item.addons.indexOf('blackout') === -1) {
+              const index = newAddons.indexOf('pleated');
+              if (index > -1) newAddons.splice(index, 1);
+            }
+            if (value.includes('pleated') && item.addons.indexOf('pleated') === -1) {
+              const index = newAddons.indexOf('blackout');
+              if (index > -1) newAddons.splice(index, 1);
+            }
+            if (value.includes('doubleGlass') && item.addons.indexOf('doubleGlass') === -1) {
+              const index = newAddons.indexOf('colorGlass');
+              if (index > -1) newAddons.splice(index, 1);
+            }
+            if (value.includes('colorGlass') && item.addons.indexOf('colorGlass') === -1) {
+              const index = newAddons.indexOf('doubleGlass');
+              if (index > -1) newAddons.splice(index, 1);
+            }
+            if (value.includes('skewWindow1') && item.addons.indexOf('skewWindow1') === -1) {
+              const index = newAddons.indexOf('skewWindow2');
+              if (index > -1) newAddons.splice(index, 1);
+            }
+            if (value.includes('skewWindow2') && item.addons.indexOf('skewWindow2') === -1) {
+              const index = newAddons.indexOf('skewWindow1');
+              if (index > -1) newAddons.splice(index, 1);
+            }
+            if (value.includes('skewBalcony1') && item.addons.indexOf('skewBalcony1') === -1) {
+              const index = newAddons.indexOf('skewBalcony2');
+              if (index > -1) newAddons.splice(index, 1);
+            }
+            if (value.includes('skewBalcony2') && item.addons.indexOf('skewBalcony2') === -1) {
+              const index = newAddons.indexOf('skewBalcony1');
+              if (index > -1) newAddons.splice(index, 1);
+            }
+            updatedItem.addons = newAddons;
+          }
+
+          return updatedItem;
+        }
+        return item;
+      })
+    );
   };
 
   const toggleAddon = (itemId: number, addonId: string) => {
-    const item = items.find(i => i.id === itemId);
+    const item = items.find((i) => i.id === itemId);
     if (!item) return;
-    
+
     let newAddons = [...item.addons];
     if (newAddons.includes(addonId)) {
-      newAddons = newAddons.filter(a => a !== addonId);
+      newAddons = newAddons.filter((a) => a !== addonId);
     } else {
       newAddons.push(addonId);
     }
@@ -500,27 +608,32 @@ export default function App() {
     let totalArea = 0;
     let totalPrice = 0;
 
-    const itemsCalculated = items.map(item => {
+    const itemsCalculated = items.map((item) => {
       const qty = item.quantity || 1;
       const w = item.width || 0;
       const h = item.height || 0;
       let area = (w * h) / 10000;
-      
+
       // Industrial norm: minimum 1m² for both windows and doors
       const minArea = 1.0;
-      if (area > 0 && area < minArea) area = minArea; 
-      
+      if (area > 0 && area < minArea) area = minArea;
+
       totalArea += area * qty;
 
-      let profilePrice = profiles[item.profile]?.price || 0;
+      const selectedProfile = effectiveProfiles[item.profile];
+      const isFlatProfile = Boolean(selectedProfile?.isFlat);
+      let rawProfilePrice = selectedProfile?.price || 0;
       if (item.addons.includes('panda')) {
-        profilePrice = profilePrice * 1.5;
+        rawProfilePrice = rawProfilePrice * 1.5;
       }
+      const profilePrice = isFlatProfile ? 0 : rawProfilePrice;
+      const flatProfilePrice = isFlatProfile ? rawProfilePrice : 0;
+
       let addonsPrice = 0;
       let flatAddonsPrice = 0;
-      
-      item.addons.forEach(id => {
-        const addon = addons[id];
+
+      item.addons.forEach((id) => {
+        const addon = effectiveAddons[id];
         if (addon) {
           if (addon.isFlat) {
             flatAddonsPrice += addon.price;
@@ -530,21 +643,30 @@ export default function App() {
         }
       });
 
-      let singleItemTotal = (area * (profilePrice + addonsPrice)) + flatAddonsPrice;
+      let singleItemTotal =
+        area * (profilePrice + addonsPrice) + flatProfilePrice + flatAddonsPrice;
       if (item.fixedPrice && item.fixedPrice > 0) {
         singleItemTotal = item.fixedPrice;
       }
       const itemTotal = singleItemTotal * qty;
       totalPrice += itemTotal;
 
-      return { ...item, area, itemTotal, profilePrice, addonsPrice, flatAddonsPrice };
+      return {
+        ...item,
+        area,
+        itemTotal,
+        profilePrice,
+        flatProfilePrice,
+        addonsPrice,
+        flatAddonsPrice,
+      };
     });
 
     return { itemsCalculated, totalArea, totalPrice };
-  }, [items, profiles, addons]);
+  }, [items, effectiveProfiles, effectiveAddons]);
 
   const handleCustomerChange = (field: keyof CustomerInfo, value: any) => {
-    setCustomer(prev => ({ ...prev, [field]: value }));
+    setCustomer((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleSaveCurrentQuote = (name: string) => {
@@ -552,9 +674,11 @@ export default function App() {
       const val = customer.discountValue || 0;
       const type = customer.discountType || 'cash';
       const notesAmount = customer.notesAmount || 0;
-      const additionalNotesSum = customer.additionalNotes?.reduce((sum, n) => sum + (n.amount || 0), 0) || 0;
+      const additionalNotesSum =
+        customer.additionalNotes?.reduce((sum, n) => sum + (n.amount || 0), 0) || 0;
       const totalNotesAmount = notesAmount + additionalNotesSum;
-      const discountAmt = type === 'percentage' ? (calculations.totalPrice * (val / 100)) : val;
+      const discountAmt =
+        type === 'percentage' ? calculations.totalPrice * (val / 100) : val;
       return Math.max(0, calculations.totalPrice - discountAmt + totalNotesAmount);
     })();
 
@@ -563,10 +687,14 @@ export default function App() {
       name: name,
       customer: customer,
       items: items,
+      pricingSnapshot: {
+        profiles: JSON.parse(JSON.stringify(effectiveProfiles)),
+        addons: JSON.parse(JSON.stringify(effectiveAddons)),
+      },
       date: new Date().toLocaleDateString('ar-EG'),
       totalPrice: finalPrice,
     };
-    const updated = [newQuote, ...savedQuotes.filter(q => q.id !== newQuote.id)];
+    const updated = [newQuote, ...savedQuotes.filter((q) => q.id !== newQuote.id)];
     setSavedQuotes(updated);
     try {
       localStorage.setItem('almekawy_saved_quotes', JSON.stringify(updated));
@@ -575,8 +703,8 @@ export default function App() {
     }
 
     // Save to Firebase Firestore Cloud
-    saveQuoteToCloud(newQuote).catch(err => {
-      console.warn("Firestore save fallback error:", err);
+    saveQuoteToCloud(newQuote).catch((err) => {
+      console.warn('Firestore save fallback error:', err);
     });
 
     // Also automatically register or update customer in directory
@@ -585,7 +713,7 @@ export default function App() {
         name: customer.name.trim(),
         phone: (customer.phone || '').trim(),
         address: (customer.address || '').trim(),
-      }).catch(err => console.warn("Auto customer save error:", err));
+      }).catch((err) => console.warn('Auto customer save error:', err));
     }
 
     // Save to the backend server
@@ -596,25 +724,31 @@ export default function App() {
       },
       body: JSON.stringify(newQuote),
     })
-      .then(res => res.json())
-      .then(data => {
+      .then((res) => res.json())
+      .then((data) => {
         if (data.success) {
-          console.log("Successfully saved quote to backend server");
+          console.log('Successfully saved quote to backend server');
         }
       })
-      .catch(err => {
-        console.error("Error saving quote to backend server:", err);
+      .catch((err) => {
+        console.error('Error saving quote to backend server:', err);
       });
   };
 
-  const handleSaveCustomer = async (data: { name: string; phone: string; address?: string; notes?: string }) => {
+  const handleSaveCustomer = async (data: {
+    name: string;
+    phone: string;
+    address?: string;
+    notes?: string;
+  }) => {
     try {
       const saved = await saveCustomerToCloud(data);
-      setSavedCustomers(prev => {
+      setSavedCustomers((prev) => {
         const cleanTarget = normalizePhoneNumber(saved.phone);
-        const filtered = prev.filter(c => {
+        const filtered = prev.filter((c) => {
           const cClean = normalizePhoneNumber(c.phone);
-          const samePhone = cleanTarget.length >= 7 && cClean.length >= 7 && cleanTarget === cClean;
+          const samePhone =
+            cleanTarget.length >= 7 && cClean.length >= 7 && cleanTarget === cClean;
           const sameId = c.id === saved.id;
           return !samePhone && !sameId;
         });
@@ -630,9 +764,9 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(saved),
-      }).catch(err => console.warn("Backend customer save fallback:", err));
+      }).catch((err) => console.warn('Backend customer save fallback:', err));
     } catch (error) {
-      console.error("Error saving customer:", error);
+      console.error('Error saving customer:', error);
       throw error;
     }
   };
@@ -640,8 +774,8 @@ export default function App() {
   const handleDeleteCustomer = async (id: string) => {
     try {
       await deleteCustomerFromCloud(id);
-      setSavedCustomers(prev => {
-        const updated = prev.filter(c => c.id !== id);
+      setSavedCustomers((prev) => {
+        const updated = prev.filter((c) => c.id !== id);
         try {
           localStorage.setItem('almekawy_saved_customers', JSON.stringify(updated));
         } catch (e) {}
@@ -650,15 +784,15 @@ export default function App() {
 
       fetch(`/api/customers/${id}`, {
         method: 'DELETE',
-      }).catch(err => console.warn("Backend customer delete fallback:", err));
+      }).catch((err) => console.warn('Backend customer delete fallback:', err));
     } catch (error) {
-      console.error("Error deleting customer:", error);
+      console.error('Error deleting customer:', error);
       throw error;
     }
   };
 
   const handleSelectCustomer = (selected: SavedCustomer) => {
-    setCustomer(prev => ({
+    setCustomer((prev) => ({
       ...prev,
       name: selected.name,
       phone: selected.phone,
@@ -679,11 +813,24 @@ export default function App() {
   const handleLoadQuote = (quote: SavedQuote) => {
     setCustomer(quote.customer);
     setItems(quote.items);
+    if (
+      quote.pricingSnapshot &&
+      quote.pricingSnapshot.profiles &&
+      Object.keys(quote.pricingSnapshot.profiles).length > 0
+    ) {
+      setLoadedQuotePricing({
+        quoteName: quote.name,
+        profiles: quote.pricingSnapshot.profiles,
+        addons: quote.pricingSnapshot.addons || {},
+      });
+    } else {
+      setLoadedQuotePricing(null);
+    }
     setActiveMainTab('input');
   };
 
   const handleDeleteQuote = (id: string) => {
-    const updated = savedQuotes.filter(q => q.id !== id);
+    const updated = savedQuotes.filter((q) => q.id !== id);
     setSavedQuotes(updated);
     try {
       localStorage.setItem('almekawy_saved_quotes', JSON.stringify(updated));
@@ -692,29 +839,32 @@ export default function App() {
     }
 
     // Delete from Firebase Firestore Cloud
-    deleteQuoteFromCloud(id).catch(err => {
-      console.warn("Firestore delete fallback error:", err);
+    deleteQuoteFromCloud(id).catch((err) => {
+      console.warn('Firestore delete fallback error:', err);
     });
 
     // Delete from the backend server
     fetch(`/api/quotes/${id}`, {
       method: 'DELETE',
     })
-      .then(res => res.json())
-      .then(data => {
+      .then((res) => res.json())
+      .then((data) => {
         if (data.success) {
-          console.log("Successfully deleted quote from backend server");
+          console.log('Successfully deleted quote from backend server');
         }
       })
-      .catch(err => {
-        console.error("Error deleting quote from backend server:", err);
+      .catch((err) => {
+        console.error('Error deleting quote from backend server:', err);
       });
   };
 
   const handleSaveQuoteAuto = () => {
-    const defaultName = customer.name?.trim() 
+    const defaultName = customer.name?.trim()
       ? `عرض سعر - ${customer.name.trim()}`
-      : `عرض سعر تلقائي - ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}`;
+      : `عرض سعر تلقائي - ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString(
+          'ar-EG',
+          { hour: '2-digit', minute: '2-digit' }
+        )}`;
     handleSaveCurrentQuote(defaultName);
   };
 
@@ -733,7 +883,12 @@ export default function App() {
   };
 
   return (
-    <div className={`min-h-screen ${theme === 'dark' ? 'dark-mode' : ''} bg-[#F8F9FA] text-[#1A1A1A] font-sans selection:bg-yellow-200 selection:text-[#0F172A] transition-colors duration-300`} dir="rtl">
+    <div
+      className={`min-h-screen ${
+        theme === 'dark' ? 'dark-mode' : ''
+      } bg-[#F8F9FA] text-[#1A1A1A] font-sans selection:bg-yellow-200 selection:text-[#0F172A] transition-colors duration-300`}
+      dir="rtl"
+    >
       {/* Semantic crawlable company & UPVC services summary for search engines */}
       <section className="sr-only print:hidden" aria-label="خدمات وفروع The Best Windows في مصر">
         <h2>توريد وتركيب شبابيك وأبواب UPVC في مصر من {BRAND_NAME}</h2>
@@ -746,13 +901,56 @@ export default function App() {
         </ul>
       </section>
 
+      {/* Unconfirmed fallback warning banner if Firestore pricing read fails */}
+      {pricingSyncStatus === 'error' && pricingErrorText && (
+        <div
+          role="alert"
+          className="bg-amber-950 text-amber-100 border-b border-amber-700 px-4 py-2.5 text-xs font-bold flex flex-wrap items-center justify-center gap-3 print:hidden"
+        >
+          <span className="flex items-center gap-1.5">
+            <AlertTriangle size={15} className="text-[#FACC15] shrink-0" />
+            <span>{pricingErrorText}</span>
+          </span>
+          <button
+            type="button"
+            onClick={loadLatestPricingFromServer}
+            className="bg-[#FACC15] hover:bg-[#E2B90F] text-[#0F172A] px-3 py-1 rounded-lg font-black text-[11px] flex items-center gap-1 cursor-pointer transition"
+          >
+            <RefreshCw size={12} />
+            <span>إعادة الاتصال وتحديث الأسعار</span>
+          </button>
+        </div>
+      )}
+
+      {/* Historical quote pricing preservation notice */}
+      {loadedQuotePricing && (
+        <div
+          role="status"
+          className="bg-[#0F172A] text-white border-b border-slate-700 px-4 py-2.5 text-xs font-bold flex flex-wrap items-center justify-center gap-3 print:hidden"
+        >
+          <span className="flex items-center gap-1.5">
+            <History size={15} className="text-[#FACC15] shrink-0" />
+            <span>
+              يتم عرض &laquo;{loadedQuotePricing.quoteName}&raquo; بالأسعار المحفوظة وقت إنشائه للحفاظ على بيانات عرض السعر السابق.
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={switchLoadedQuoteToLivePricing}
+            className="bg-[#FACC15] hover:bg-[#E2B90F] text-[#0F172A] px-3 py-1 rounded-lg font-black text-[11px] cursor-pointer transition"
+          >
+            التبديل إلى أحدث الأسعار الحالية
+          </button>
+        </div>
+      )}
+
       {/* 1. Ground-up Mobile-Dedicated View (Mobile Only < md) */}
       <MobileView
         customer={customer}
         items={items}
         calculations={calculations}
-        profiles={profiles}
-        addons={addons}
+        profiles={effectiveProfiles}
+        addons={effectiveAddons}
         savedQuotes={savedQuotes}
         savedCustomers={savedCustomers}
         theme={theme}
@@ -780,8 +978,8 @@ export default function App() {
 
       {/* 2. Desktop-Dedicated View (Unchanged Desktop Layout >= md, plus Canonical Print Target) */}
       <div className="hidden md:block print:block pb-24 md:pb-0 print:pb-0">
-        <Header 
-          onOpenDevSettings={() => setIsDevModalOpen(true)} 
+        <Header
+          onOpenDevSettings={() => setIsDevModalOpen(true)}
           theme={theme}
           onToggleTheme={toggleTheme}
           savedQuotesCount={savedQuotes.length}
@@ -793,7 +991,7 @@ export default function App() {
         />
 
         <main className="max-w-5xl mx-auto px-4 py-12 print:max-w-none print:p-0 print:m-0">
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             className="bg-white rounded-3xl border-2 border-slate-200 border-r-8 border-r-[#0F172A] p-8 mb-12 print:hidden overflow-hidden relative shadow-sm"
@@ -834,11 +1032,12 @@ export default function App() {
           </div>
 
           <div className={activeMainTab === 'input' ? 'block print:hidden' : 'hidden print:hidden'}>
+            {/* Official pricing table always displays the live shared Firestore catalog */}
             <PricingTable profiles={profiles} addons={addons} />
 
-            <CustomerForm 
-              customer={customer} 
-              onChange={handleCustomerChange} 
+            <CustomerForm
+              customer={customer}
+              onChange={handleCustomerChange}
               savedCustomers={savedCustomers}
               onOpenCustomersModal={() => setPasswordTarget('customers')}
               onSaveCustomerToDirectory={handleSaveCustomerFromForm}
@@ -848,7 +1047,7 @@ export default function App() {
             <div className="space-y-8 print:hidden">
               <AnimatePresence mode="popLayout" initial={false}>
                 {calculations.itemsCalculated.map((item, index) => (
-                  <ItemCard 
+                  <ItemCard
                     key={item.id}
                     item={item}
                     index={index}
@@ -856,8 +1055,8 @@ export default function App() {
                     removeItem={removeItem}
                     toggleAddon={toggleAddon}
                     formatCurrency={formatCurrency}
-                    profiles={profiles}
-                    addons={addons}
+                    profiles={effectiveProfiles}
+                    addons={effectiveAddons}
                   />
                 ))}
               </AnimatePresence>
@@ -875,7 +1074,7 @@ export default function App() {
               </motion.button>
             </div>
 
-            <SummaryBox 
+            <SummaryBox
               calculations={calculations}
               customer={customer}
               onChange={handleCustomerChange}
@@ -885,12 +1084,12 @@ export default function App() {
           </div>
 
           <div className={activeMainTab === 'quote' ? 'block' : 'hidden print:block'}>
-            <DetailedQuoteView 
+            <DetailedQuoteView
               customer={customer}
               calculations={calculations}
               formatCurrency={formatCurrency}
-              profiles={profiles}
-              addons={addons}
+              profiles={effectiveProfiles}
+              addons={effectiveAddons}
             />
           </div>
 
@@ -977,12 +1176,13 @@ export default function App() {
                 setIsCustomersModalOpen(true);
               }
             }}
-            requiredPassword="662006"
           />
         )}
       </AnimatePresence>
 
-      <style dangerouslySetInnerHTML={{__html: `
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
         @media print {
           body { background-color: white !important; }
           .print\\:hidden { display: none !important; }
@@ -993,7 +1193,9 @@ export default function App() {
             background: transparent;
           }
         }
-      `}} />
+      `,
+        }}
+      />
     </div>
   );
 }

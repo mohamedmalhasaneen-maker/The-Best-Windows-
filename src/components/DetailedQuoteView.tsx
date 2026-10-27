@@ -739,7 +739,9 @@ function A4PageSheet({
                           {formatCurrency(item.itemTotal)}
                         </div>
                         <div className="text-[9.5px] text-slate-500 mt-0.5">
-                          {formatCurrency(item.profilePrice + item.addonsPrice)} / م²
+                          {item.flatProfilePrice && item.flatProfilePrice > 0
+                            ? `${formatCurrency(item.flatProfilePrice)} / ${profiles[item.profile]?.unit || 'للقطعة'}`
+                            : `${formatCurrency(item.profilePrice + item.addonsPrice)} / م²`}
                         </div>
                         {item.quantity && item.quantity > 1 ? (
                           <div className="text-[9px] text-slate-500 font-bold">

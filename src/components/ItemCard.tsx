@@ -324,7 +324,7 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
               const formatAddonPrice = (ad: typeof addon) => {
                 if (ad.id === 'panda') return 'متر × 1.5';
                 if (ad.isFlat) {
-                  return `+${ad.price} ج.م`;
+                  return `+${ad.price} ج.م${ad.unit ? ` / ${ad.unit}` : ''}`;
                 }
                 return `+${ad.price} ج.م/م²`;
               };
@@ -434,7 +434,7 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
                     const formatAddonPrice = (ad: typeof addon) => {
                       if (ad.id === 'panda') return 'متر × 1.5';
                       if (ad.isFlat) {
-                        return `+${ad.price} ج.م`;
+                        return `+${ad.price} ج.م${ad.unit ? ` / ${ad.unit}` : ''}`;
                       }
                       return `+${ad.price} ج.م/م²`;
                     };
@@ -505,7 +505,19 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
       {/* إجمالي البند */}
       <div className="bg-slate-50 p-5 border-t-2 border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 print:bg-white print:border-t-2 print:border-slate-800">
         <div className="text-slate-500 text-sm font-bold flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span>سعر المتر المربع لهذا البند: <span className="font-bold text-slate-800">{formatCurrency(item.profilePrice + item.addonsPrice)}</span></span>
+          {item.flatProfilePrice && item.flatProfilePrice > 0 ? (
+            <span>
+              سعر القطاع ({profiles[item.profile]?.unit || 'للقطعة'}):{' '}
+              <span className="font-bold text-slate-800">{formatCurrency(item.flatProfilePrice)}</span>
+              {item.addonsPrice > 0 ? (
+                <span className="mr-2">
+                  + {formatCurrency(item.addonsPrice)} / م²
+                </span>
+              ) : null}
+            </span>
+          ) : (
+            <span>سعر المتر المربع لهذا البند: <span className="font-bold text-slate-800">{formatCurrency(item.profilePrice + item.addonsPrice)}</span></span>
+          )}
           {item.flatAddonsPrice && item.flatAddonsPrice > 0 ? (
             <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-100 font-extrabold text-xs">
               + {formatCurrency(item.flatAddonsPrice)} إضافات مقطوعة

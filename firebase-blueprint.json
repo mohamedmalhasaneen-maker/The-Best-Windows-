@@ -15,6 +15,10 @@
           "type": "array",
           "description": "List of window/door quote items"
         },
+        "pricingSnapshot": {
+          "type": "object",
+          "description": "Historical pricing snapshot of profiles and addons at quote creation time"
+        },
         "totalPrice": { "type": "number", "description": "Calculated total price in EGP" },
         "discountPercentage": { "type": "number", "description": "Optional discount percentage applied" },
         "date": { "type": "string", "maxLength": 100, "description": "Formatted date string" },
@@ -39,6 +43,64 @@
         "serverUpdatedAt": { "type": "string", "format": "date-time", "description": "Firestore server timestamp" }
       },
       "required": ["id", "name", "phone"]
+    },
+    "PricingConfig": {
+      "title": "PricingConfig",
+      "description": "Shared authoritative pricing catalog of UPVC profiles and addons for all site visitors",
+      "type": "object",
+      "properties": {
+        "profiles": {
+          "type": "object",
+          "description": "Map of UPVC profile definitions keyed by profile ID"
+        },
+        "addons": {
+          "type": "object",
+          "description": "Map of optional addon definitions keyed by addon ID"
+        },
+        "profileOrder": {
+          "type": "array",
+          "description": "Ordered list of profile IDs to preserve exact display order"
+        },
+        "addonOrder": {
+          "type": "array",
+          "description": "Ordered list of addon IDs to preserve exact display order"
+        },
+        "version": {
+          "type": "number",
+          "description": "Monotonically increasing revision number to prevent stale overwrites"
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "ISO timestamp of the latest price update"
+        },
+        "serverUpdatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Authoritative Firestore server timestamp"
+        }
+      },
+      "required": ["profiles", "addons", "profileOrder", "addonOrder", "version", "updatedAt", "serverUpdatedAt"]
+    },
+    "AdminGate": {
+      "title": "AdminGate",
+      "description": "Write-only cryptographic authorization gate for administrator verification and pricing mutations",
+      "type": "object",
+      "properties": {
+        "proof": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Client-derived SHA-256 hex digest verified server-side in Firestore rules"
+        },
+        "verifiedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server timestamp proving atomic freshness"
+        }
+      },
+      "required": ["proof", "verifiedAt"]
     }
   },
   "firestore": {
@@ -49,6 +111,14 @@
     "/customers/{customerId}": {
       "schema": "Customer",
       "description": "Registered customer profiles directory"
+    },
+    "/settings/pricing": {
+      "schema": "PricingConfig",
+      "description": "Authoritative shared pricing catalog read by all visitors and updated only by authorized admins"
+    },
+    "/admin_gate/{gateId}": {
+      "schema": "AdminGate",
+      "description": "Write-only cryptographic admin verification gate"
     }
   }
 }

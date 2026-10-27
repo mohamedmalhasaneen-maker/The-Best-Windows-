@@ -90,7 +90,13 @@ export default function PricingTable({ profiles, addons }: PricingTableProps) {
                         <h4 className="text-sm font-black text-[#0F172A]">{profile.name}</h4>
                       </div>
                       <div className="text-left font-mono font-black text-[#0F172A]">
-                        {formatCurrency(profile.price)}
+                        {profile.isFlat ? (
+                          <span className="text-xs text-amber-600 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-100 font-bold block">
+                            {formatCurrency(profile.price)} / {profile.unit || 'للقطعة'}
+                          </span>
+                        ) : (
+                          formatCurrency(profile.price)
+                        )}
                       </div>
                     </div>
                   ))}

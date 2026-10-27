@@ -317,7 +317,7 @@ export const MobileItemCard: React.FC<MobileItemCardProps> = ({
             >
               {(Object.values(profiles) as Profile[]).map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} — ({formatCurrency(p.price)} / م²)
+                  {p.name} — ({formatCurrency(p.price)} / {p.isFlat ? p.unit || 'للقطعة' : 'م²'})
                 </option>
               ))}
             </select>
@@ -508,7 +508,11 @@ export const MobileItemCard: React.FC<MobileItemCardProps> = ({
                       <span className={`text-[10px] font-mono shrink-0 px-1.5 py-0.5 rounded font-bold ${
                         isChecked ? 'bg-slate-800 text-[#FACC15]' : 'bg-slate-100 text-slate-500'
                       }`}>
-                        {addon.price > 0 ? `+${addon.price} ج.م` : 'مجاناً'}
+                        {addon.id === 'panda'
+                          ? 'متر × 1.5'
+                          : addon.price > 0
+                          ? `+${addon.price} ج.م / ${addon.isFlat ? addon.unit || 'للقطعة' : 'م²'}`
+                          : 'مجاناً'}
                       </span>
                     </button>
                   );
@@ -527,8 +531,16 @@ export const MobileItemCard: React.FC<MobileItemCardProps> = ({
             </p>
           </div>
           <div className="text-[10px] text-slate-300 text-left font-mono">
-            <span>القطاع: {formatCurrency(item.profilePrice)}</span>
-            {item.addonsPrice > 0 && <span className="block text-emerald-400">+ إضافات: {formatCurrency(item.addonsPrice)}</span>}
+            <span>
+              القطاع:{' '}
+              {item.flatProfilePrice && item.flatProfilePrice > 0
+                ? `${formatCurrency(item.flatProfilePrice)} (${profiles[item.profile]?.unit || 'للقطعة'})`
+                : formatCurrency(item.profilePrice)}
+            </span>
+            {item.addonsPrice > 0 && <span className="block text-emerald-400">+ إضافات: {formatCurrency(item.addonsPrice)} / م²</span>}
+            {item.flatAddonsPrice && item.flatAddonsPrice > 0 ? (
+              <span className="block text-emerald-400">+ مقطوع: {formatCurrency(item.flatAddonsPrice)}</span>
+            ) : null}
           </div>
         </div>
       </div>
