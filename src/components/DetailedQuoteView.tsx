@@ -40,10 +40,42 @@ interface QuotePageDescriptor {
   showTermsAndSignatures: boolean;
 }
 
-function estimateItemRowHeight(item: CalculatedItem): number {
-  const extraAddons = Math.max(0, item.addons.length - 2);
-  const titleLines = item.title && item.title.length > 28 ? 14 : 0;
-  return 62 + extraAddons * 14 + titleLines;
+function estimateItemRowHeight(
+  item: CalculatedItem,
+  profiles: Record<string, Profile>,
+  addons: Record<string, Addon>
+): number {
+  const threshold = 1.0;
+  const isMinArea = (item.width * item.height) / 10000 < threshold;
+
+  // Column 2 (بيان البند): Title (wrapped) + System type + Opening + Preview
+  const title = item.title || '';
+  // Narrow column (~220px), approx 26 characters per line for Arabic font
+  const titleLines = Math.max(1, Math.ceil(title.length / 26));
+  // Preview is 46x46. Title (13px) + subtext (10px) + spacing.
+  const descHeight = Math.max(48, titleLines * 16 + 24);
+
+  // Column 6 (تفاصيل القطاع): Profile name + Inner type + Glass type + Hinge panes
+  const profileName = profiles[item.profile]?.name || item.profile || '';
+  const pLines = Math.max(1, Math.ceil(profileName.length / 20));
+  const detailLines = pLines + 1 + (item.innerType !== 'panel' ? 1 : 0) + (item.opening === 'مفصلي' ? 1 : 0);
+  const detailsHeight = detailLines * 15 + 12;
+
+  // Column 7 (الإضافات): List of bullet points
+  const addonCount = item.addons.length;
+  // Each addon is a line (13px) + small gap
+  const addonsHeight = Math.max(1, addonCount) * 14 + 10;
+
+  // Column 8 (الإجمالي): Total + Unit price + Quantity breakdown + Flat addons
+  const priceLines = 2 + (item.quantity && item.quantity > 1 ? 1 : 0) + (item.flatAddonsPrice ? 1 : 0);
+  const priceHeight = priceLines * 16 + 10;
+
+  // Column 4 (المساحة): Area + Min Area warning
+  const areaHeight = 2 * 14 + (isMinArea ? 14 : 0) + 12;
+
+  // Max height of all columns + vertical padding (py-1.5 is 6px each side) + borders
+  // We use 12px for padding + 2px for border line
+  return Math.max(descHeight, detailsHeight, addonsHeight, priceHeight, areaHeight) + 14;
 }
 
 function estimateNotesHeight(customer: CustomerInfo): number {
@@ -51,37 +83,40 @@ function estimateNotesHeight(customer: CustomerInfo): number {
   const extraNotes = (customer.additionalNotes || []).filter((n) => n.text && n.text.trim().length > 0);
   if (!mainNote && extraNotes.length === 0) return 0;
 
-  let height = 52;
+  let height = 55; // Header + padding
   if (mainNote) {
-    const lines = Math.max(1, Math.ceil(mainNote.length / 75) + (mainNote.split('\n').length - 1));
-    height += lines * 20 + (customer.notesAmount ? 28 : 10);
+    const lines = Math.max(1, Math.ceil(mainNote.length / 90) + (mainNote.split('\n').length - 1));
+    height += lines * 20 + (customer.notesAmount ? 32 : 12);
   }
   for (const n of extraNotes) {
     const text = n.text.trim();
-    const lines = Math.max(1, Math.ceil(text.length / 75) + (text.split('\n').length - 1));
-    height += lines * 20 + (n.amount ? 28 : 14);
+    const lines = Math.max(1, Math.ceil(text.length / 90) + (text.split('\n').length - 1));
+    height += lines * 20 + (n.amount ? 32 : 16);
   }
   return height;
 }
 
 function paginateQuoteIntoA4Pages(
   items: CalculatedItem[],
-  customer: CustomerInfo
+  customer: CustomerInfo,
+  profiles: Record<string, Profile>,
+  addons: Record<string, Addon>
 ): QuotePageDescriptor[] {
-  // Inner vertical height available above the fixed bottom citation bar (~965px safe budget out of 1037px)
-  const SAFE_PAGE_BUDGET = 955;
-  const FIRST_HEADER_HEIGHT = 186;
-  const CONT_HEADER_HEIGHT = 62;
-  const TABLE_HEADER_HEIGHT = 38;
+  // Use a very precise budget of 1030px (A4 is 1123, leaves 93px for margins and footer)
+  const SAFE_PAGE_BUDGET = 1030;
+  const FIRST_HEADER_HEIGHT = 195;
+  const CONT_HEADER_HEIGHT = 65;
+  const TABLE_HEADER_HEIGHT = 45;
+  const INDICATOR_HEIGHT = 15;
+
   const TOTALS_HEIGHT =
     (customer.discountValue && customer.discountValue > 0) ||
     (customer.notesAmount && customer.notesAmount !== 0) ||
     (customer.additionalNotes && customer.additionalNotes.some((n) => (n.amount || 0) !== 0))
-      ? 98
-      : 84;
+      ? 100
+      : 85;
   const NOTES_HEIGHT = estimateNotesHeight(customer);
-  const hasNotes = NOTES_HEIGHT > 0;
-  const TERMS_AND_SIGNATURES_HEIGHT = 248;
+  const TERMS_AND_SIGNATURES_HEIGHT = 380;
 
   const rawPages: Omit<QuotePageDescriptor, 'pageNumber'>[] = [];
 
@@ -95,7 +130,7 @@ function paginateQuoteIntoA4Pages(
   };
   let usedHeight = FIRST_HEADER_HEIGHT;
 
-  const startContinuationPage = () => {
+  const startNewPage = () => {
     rawPages.push(currentPage);
     currentPage = {
       isFirstPage: false,
@@ -108,45 +143,49 @@ function paginateQuoteIntoA4Pages(
     usedHeight = CONT_HEADER_HEIGHT;
   };
 
+  // Step 1: Distribute items based on estimated actual heights
   items.forEach((item, idx) => {
-    const rowH = estimateItemRowHeight(item);
-    const tableOverhead = currentPage.items.length === 0 ? TABLE_HEADER_HEIGHT + 14 : 0;
+    const rowH = estimateItemRowHeight(item, profiles, addons);
+    const isFirstOnPage = currentPage.items.length === 0;
+    const overhead = isFirstOnPage ? TABLE_HEADER_HEIGHT : 0;
+    const serialNumber = idx + 1;
 
-    if (currentPage.items.length > 0 && usedHeight + tableOverhead + rowH > SAFE_PAGE_BUDGET) {
+    // If adding this item exceeds budget, move to next page
+    if (!isFirstOnPage && usedHeight + overhead + rowH + INDICATOR_HEIGHT > SAFE_PAGE_BUDGET) {
       currentPage.hasMoreItemsAfter = true;
-      startContinuationPage();
+      startNewPage();
     }
 
     if (currentPage.items.length === 0) {
-      usedHeight += TABLE_HEADER_HEIGHT + 14;
+      usedHeight += TABLE_HEADER_HEIGHT;
     }
 
-    currentPage.items.push({
-      item,
-      serialNumber: idx + 1,
-    });
+    currentPage.items.push({ item, serialNumber });
     usedHeight += rowH;
   });
 
-  // Place Grand Totals
-  if (usedHeight + TOTALS_HEIGHT > SAFE_PAGE_BUDGET && currentPage.items.length > 0) {
-    startContinuationPage();
-  }
-  currentPage.showTotals = true;
-  usedHeight += TOTALS_HEIGHT;
+  // Step 2: Determine where to place the final blocks (Totals, Notes, Terms)
+  // We treat Totals, Notes, and Terms as an atomic block to keep them together.
+  const totalBlocksHeight = TOTALS_HEIGHT + NOTES_HEIGHT + TERMS_AND_SIGNATURES_HEIGHT;
 
-  // Place Custom Notes (if any)
-  if (hasNotes) {
-    if (usedHeight + NOTES_HEIGHT > SAFE_PAGE_BUDGET) {
-      startContinuationPage();
+  if (usedHeight + totalBlocksHeight > SAFE_PAGE_BUDGET) {
+    // If current page has items, try to move the last item to keep it company on the new page,
+    // but only if there are other items remaining on the current page to avoid leaving it empty.
+    if (currentPage.items.length > 1) {
+      const lastItem = currentPage.items.pop()!;
+      currentPage.hasMoreItemsAfter = true;
+      startNewPage();
+      currentPage.items.push(lastItem);
+      usedHeight += TABLE_HEADER_HEIGHT + estimateItemRowHeight(lastItem.item, profiles, addons);
+    } else {
+      // If only one item and it fits but the blocks don't, we start a new page just for the blocks.
+      startNewPage();
     }
-    currentPage.showNotes = true;
-    usedHeight += NOTES_HEIGHT;
   }
 
-  // Place Official Terms & Signatures
-  if (usedHeight + TERMS_AND_SIGNATURES_HEIGHT > SAFE_PAGE_BUDGET) {
-    startContinuationPage();
+  currentPage.showTotals = true;
+  if (NOTES_HEIGHT > 0) {
+    currentPage.showNotes = true;
   }
   currentPage.showTermsAndSignatures = true;
 
@@ -502,11 +541,11 @@ function A4PageSheet({
     <div
       data-export-page={exportMarker ? String(page.pageNumber) : undefined}
       dir="rtl"
-      className="a4-paper-lock bg-white text-slate-900 box-border flex flex-col justify-between select-none"
+      className="a4-paper-lock bg-white text-slate-900 box-border flex flex-col justify-start select-none overflow-hidden"
       style={{
         width: `${A4_WIDTH}px`,
         height: `${A4_HEIGHT}px`,
-        padding: '26px 32px 22px 32px',
+        padding: '24px 32px 20px 32px',
         boxSizing: 'border-box',
       }}
     >
@@ -590,8 +629,8 @@ function A4PageSheet({
             </div>
 
             {/* Introduction */}
-            <div className="my-3 text-right">
-              <p className="text-slate-600 leading-relaxed text-[12px]">
+            <div className="my-2 text-right">
+              <p className="text-slate-600 leading-relaxed text-[11.5px]">
                 بناءً على طلبكم الكريم، يسعدنا في{' '}
                 <strong className="text-slate-900 font-black">{BRAND_NAME}</strong> تقديم عرض الأسعار والمواصفات الفنية
                 التالية للفتحات المطلوبة. جميع قطاعاتنا تركية وأوروبية معتمدة تتميز بأعلى معايير الجودة والعزل التام للأتربة
@@ -601,7 +640,7 @@ function A4PageSheet({
           </>
         ) : (
           /* Compact Continuation Header on Page 2+ */
-          <div className="flex flex-row items-center justify-between gap-4 pb-3 mb-3 border-b-2 border-slate-900">
+          <div className="flex flex-row items-center justify-between gap-4 pb-2.5 mb-2.5 border-b-2 border-slate-900">
             <div className="flex items-center gap-2.5">
               <img
                 src={logoUrl}
@@ -635,7 +674,7 @@ function A4PageSheet({
 
         {/* Items Table (Rendered on pages that contain line items) */}
         {page.items.length > 0 && (
-          <div className="mb-3.5 border-[1.5px] border-slate-900 rounded-xl overflow-hidden">
+          <div className="mb-2 border-[1.5px] border-slate-900 rounded-xl overflow-hidden">
             <table className="w-full border-collapse text-right text-xs">
               <thead>
                 <tr className="bg-[#0F172A] text-white font-display border-b border-slate-900 font-black text-[11px]">
@@ -655,11 +694,11 @@ function A4PageSheet({
                   const isMinArea = (item.width * item.height) / 10000 < threshold;
                   return (
                     <tr key={item.id} className="bg-white">
-                      <td className="py-2 px-1.5 text-center font-mono font-bold text-slate-400 border-l border-slate-100 tabular-nums">
+                      <td className="py-1.5 px-1.5 text-center font-mono font-bold text-slate-400 border-l border-slate-100 tabular-nums">
                         {String(serialNumber).padStart(2, '0')}
                       </td>
 
-                      <td className="py-2 px-2.5 border-l border-slate-100">
+                      <td className="py-1.5 px-2.5 border-l border-slate-100">
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-right min-w-0">
                             <div className="font-bold text-slate-900 text-[12px] leading-snug">
@@ -684,13 +723,13 @@ function A4PageSheet({
                       </td>
 
                       <td
-                        className="py-2 px-1.5 text-center font-mono font-bold text-[#0F172A] border-l border-slate-100 text-[11px] tabular-nums"
+                        className="py-1.5 px-1.5 text-center font-mono font-bold text-[#0F172A] border-l border-slate-100 text-[11px] tabular-nums"
                         dir="ltr"
                       >
                         {item.width} × {item.height}
                       </td>
 
-                      <td className="py-2 px-1.5 text-center border-l border-slate-100 text-[11px] tabular-nums">
+                      <td className="py-1.5 px-1.5 text-center border-l border-slate-100 text-[11px] tabular-nums">
                         <div className="font-bold text-[#0F172A]">{item.area.toFixed(2)} م²</div>
                         {isMinArea && (
                           <div className="text-[9px] text-amber-700 font-bold mt-0.5 whitespace-nowrap">
@@ -699,11 +738,11 @@ function A4PageSheet({
                         )}
                       </td>
 
-                      <td className="py-2 px-1 text-center font-mono font-bold text-[#0F172A] border-l border-slate-100 text-[11px] tabular-nums">
+                      <td className="py-1.5 px-1 text-center font-mono font-bold text-[#0F172A] border-l border-slate-100 text-[11px] tabular-nums">
                         {item.quantity || 1}
                       </td>
 
-                      <td className="py-2 px-2 border-l border-slate-100 text-[10px] leading-snug">
+                      <td className="py-1.5 px-2 border-l border-slate-100 text-[10px] leading-snug">
                         <div className="font-bold text-slate-900 text-[11px]">
                           {profiles[item.profile]?.name || item.profile}
                         </div>
@@ -720,7 +759,7 @@ function A4PageSheet({
                         )}
                       </td>
 
-                      <td className="py-2 px-2 border-l border-slate-100 text-[10px] text-slate-600 leading-snug">
+                      <td className="py-1.5 px-2 border-l border-slate-100 text-[10px] text-slate-600 leading-snug">
                         {item.addons.length > 0 ? (
                           <div className="flex flex-col gap-0.5">
                             {item.addons.map((addonId) => (
@@ -734,7 +773,7 @@ function A4PageSheet({
                         )}
                       </td>
 
-                      <td className="py-2 px-2 text-left whitespace-nowrap tabular-nums">
+                      <td className="py-1.5 px-2 text-left whitespace-nowrap tabular-nums">
                         <div className="font-black text-[#0F172A] font-display text-[13px]">
                           {formatCurrency(item.itemTotal)}
                         </div>
@@ -770,7 +809,7 @@ function A4PageSheet({
 
         {/* Grand Total Area and Calculations */}
         {page.showTotals && (
-          <div className="bg-[#0F172A] text-white rounded-xl px-5 py-4 flex flex-row justify-between items-center gap-4">
+          <div className="bg-[#0F172A] text-white rounded-xl px-5 py-3 flex flex-row justify-between items-center gap-4">
             <div className="text-right">
               <h4 className="font-display font-black text-base text-white">مجموع مسطحات الأعمال</h4>
               <p className="text-slate-300 text-[11px] mt-0.5">إجمالي المساحة الفعلية وصافي القيمة المعتمدة للعرض:</p>
@@ -844,8 +883,8 @@ function A4PageSheet({
 
         {/* Custom Notes Section */}
         {page.showNotes && (notes || additionalNotes.some((n) => n.text)) && (
-          <div className="mt-3.5 bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-right space-y-2.5">
-            <h3 className="text-[11px] font-black text-[#0F172A]">ملاحظات خاصة وتفاصيل إضافية:</h3>
+          <div className="mt-2 bg-slate-50 border border-slate-200 p-3 rounded-xl text-right space-y-2">
+            <h3 className="text-[10.5px] font-black text-[#0F172A]">ملاحظات خاصة وتفاصيل إضافية:</h3>
 
             {notes && (
               <div className="border-b border-slate-200 pb-2 last:border-none last:pb-0">
@@ -881,8 +920,8 @@ function A4PageSheet({
 
         {/* Official Terms & Signatures */}
         {page.showTermsAndSignatures && (
-          <div className="mt-4 pt-3.5 border-t border-slate-200 text-right">
-            <h3 className="text-[11px] font-black text-slate-500 mb-2.5">
+          <div className="mt-3 pt-3 border-t border-slate-200 text-right">
+            <h3 className="text-[10.5px] font-black text-slate-500 mb-2">
               الشروط والمواصفات وجودة {BRAND_NAME}
             </h3>
 
@@ -952,7 +991,7 @@ function A4PageSheet({
       </div>
 
       {/* Pinned Official Quotation Footer Citation on Every Page */}
-      <div className="pt-2.5 mt-2 border-t border-slate-200 text-right shrink-0">
+      <div className="pt-2.5 mt-auto border-t border-slate-200 text-right shrink-0">
         <div className="flex flex-row justify-between items-center gap-3 text-[9.5px] text-slate-500 font-bold tabular-nums">
           <p className="truncate">
             الفروع والمعارض: {COMPANY_LOCATIONS.map((l) => l.name).join(' · ')}
@@ -985,7 +1024,8 @@ export default function DetailedQuoteView({
   isMobileViewport = false,
 }: Props) {
   const [currentPageIndex, setCurrentPageIndex] = React.useState(0);
-  const [exportState, setExportState] = React.useState<'idle' | 'downloading' | 'sharing'>('idle');
+  const [exportState, setExportState] = React.useState<'idle' | 'downloading' | 'preparing-share' | 'ready-to-share'>('idle');
+  const [preparedShareFile, setPreparedShareFile] = React.useState<File | null>(null);
   const [canNativeShare, setCanNativeShare] = React.useState(false);
 
   const stageRef = React.useRef<HTMLDivElement>(null);
@@ -1033,9 +1073,17 @@ export default function DetailedQuoteView({
     return Math.max(0, calculations.totalPrice - discountAmount + totalNotesAmount);
   }, [calculations.totalPrice, discountAmount, totalNotesAmount]);
 
+  // Reset prepared file if anything changes
+  React.useEffect(() => {
+    setPreparedShareFile(null);
+    if (exportState === 'ready-to-share') {
+      setExportState('idle');
+    }
+  }, [customer, calculations, profiles, addons]);
+
   const pages = React.useMemo(() => {
-    return paginateQuoteIntoA4Pages(calculations.itemsCalculated, customer);
-  }, [calculations.itemsCalculated, customer]);
+    return paginateQuoteIntoA4Pages(calculations.itemsCalculated, customer, profiles, addons);
+  }, [calculations.itemsCalculated, customer, profiles, addons]);
 
   // Keep current page index valid whenever item count changes
   React.useEffect(() => {
@@ -1180,34 +1228,46 @@ export default function DetailedQuoteView({
   };
 
   const handleSharePdf = async () => {
-    if (exportState !== 'idle' || typeof navigator === 'undefined' || !navigator.share) return;
-    setExportState('sharing');
+    if (typeof navigator === 'undefined' || !navigator.share) return;
+
+    // Phase 2: Actual synchronous share call
+    if (exportState === 'ready-to-share' && preparedShareFile) {
+      try {
+        if (navigator.canShare && navigator.canShare({ files: [preparedShareFile] })) {
+          await navigator.share({
+            title: `عرض سعر - ${BRAND_NAME}`,
+            text: `عرض سعر تفصيلي من ${BRAND_NAME} للعميل ${customer.name || 'الكريم'}`,
+            files: [preparedShareFile],
+          });
+        } else {
+          await navigator.share({
+            title: `عرض سعر - ${BRAND_NAME}`,
+            text: `عرض سعر تفصيلي من ${BRAND_NAME}\nالعميل: ${
+              customer.name || 'عميلنا الكريم'
+            }\nرقم العرض: ${quoteNumber}\nصافي القيمة: ${formatCurrency(finalPrice)}`,
+            url: window.location.href,
+          });
+        }
+      } catch (err: unknown) {
+        const isAbort = err instanceof Error && err.name === 'AbortError';
+        if (!isAbort) {
+          console.error('Error sharing quote:', err);
+        }
+      }
+      return;
+    }
+
+    // Phase 1: Preparation (Async)
+    if (exportState !== 'idle') return;
+    setExportState('preparing-share');
     try {
       const { pdf, fileName } = await buildPdfDocument(2);
       const blob = pdf.output('blob');
-      const pdfFile = new File([blob], fileName, { type: 'application/pdf' });
-
-      if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
-        await navigator.share({
-          title: `عرض سعر - ${BRAND_NAME}`,
-          text: `عرض سعر تفصيلي من ${BRAND_NAME} للعميل ${customer.name || 'الكريم'}`,
-          files: [pdfFile],
-        });
-      } else {
-        await navigator.share({
-          title: `عرض سعر - ${BRAND_NAME}`,
-          text: `عرض سعر تفصيلي من ${BRAND_NAME}\nالعميل: ${
-            customer.name || 'عميلنا الكريم'
-          }\nرقم العرض: ${quoteNumber}\nصافي القيمة: ${formatCurrency(finalPrice)}`,
-          url: window.location.href,
-        });
-      }
-    } catch (err: unknown) {
-      const isAbort = err instanceof Error && err.name === 'AbortError';
-      if (!isAbort) {
-        console.error('Error sharing quote:', err);
-      }
-    } finally {
+      const file = new File([blob], fileName, { type: 'application/pdf' });
+      setPreparedShareFile(file);
+      setExportState('ready-to-share');
+    } catch (err) {
+      console.error('Error preparing PDF for sharing:', err);
       setExportState('idle');
     }
   };
@@ -1335,16 +1395,28 @@ export default function DetailedQuoteView({
               <button
                 type="button"
                 onClick={handleSharePdf}
-                disabled={exportState !== 'idle'}
-                className="min-h-[44px] px-3.5 sm:px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-900 border border-slate-200 font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap"
+                disabled={exportState === 'downloading' || exportState === 'preparing-share'}
+                className={`min-h-[44px] px-3.5 sm:px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-60 whitespace-nowrap border ${
+                  exportState === 'ready-to-share'
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600 animate-pulse'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-900 border-slate-200'
+                }`}
               >
-                {exportState === 'sharing' ? (
+                {exportState === 'preparing-share' ? (
                   <span className="w-4 h-4 border-2 border-slate-700 border-t-transparent rounded-full animate-spin shrink-0" />
                 ) : (
                   <Share2 size={16} className="shrink-0" />
                 )}
-                <span className="hidden sm:inline">مشاركة العرض</span>
-                <span className="sm:hidden">مشاركة</span>
+                {exportState === 'preparing-share' ? (
+                  <span>جاري التجهيز...</span>
+                ) : exportState === 'ready-to-share' ? (
+                  <span>اضغط للمشاركة الآن</span>
+                ) : (
+                  <>
+                    <span className="hidden sm:inline">مشاركة العرض</span>
+                    <span className="sm:hidden">مشاركة</span>
+                  </>
+                )}
               </button>
             )}
           </div>
