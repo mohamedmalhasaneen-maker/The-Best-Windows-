@@ -55,7 +55,7 @@ export default function Header({
 
   return (
     <header className="bg-[#0F172A] text-white py-5 border-b-4 border-[#F59E0B] shadow-xl print:hidden">
-      <div className="max-w-6xl mx-auto px-4 flex flex-col gap-4 text-right">
+      <div className="w-full max-w-none mx-auto px-4 sm:px-8 flex flex-col gap-4 text-right">
         {/* Top Row: Brand Identity, Quick Navigation, Workspace Controls & Socials */}
         <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
           <motion.div

@@ -889,60 +889,7 @@ export default function App() {
       } bg-[#F8F9FA] text-[#1A1A1A] font-sans selection:bg-yellow-200 selection:text-[#0F172A] transition-colors duration-300`}
       dir="rtl"
     >
-      {/* Semantic crawlable company & UPVC services summary for search engines */}
-      <section className="sr-only print:hidden" aria-label="خدمات وفروع The Best Windows في مصر">
-        <h2>توريد وتركيب شبابيك وأبواب UPVC في مصر من {BRAND_NAME}</h2>
-        <p>
-          تتخصص شركة {BRAND_NAME} في تصنيع وتوريد وتركيب شبابيك وأبواب UPVC و WPC المعتمدة في مصر، وتشمل خدماتنا أنظمة الجرار والمفصلي والقلاب والمفصلي قلاب والثابت، مع خيارات الزجاج الدبل جلاس لعزل الصوت والحرارة والأتربة، وسلك البليسيه للحشرات والبلاك أوت ونظام باندا.
-        </p>
-        <ul>
-          <li>قطاعات UPVC المعتمدة: نيولاين، بريمير، كرافت لاين، وينتك Wintech، برو لاين، وكومبن.</li>
-          <li>فروع ومعارض ومصنع {BRAND_NAME}: فرع طنطا، فرع مدينة نصر بالقاهرة، معرض طريق المحلة – المنصورة، ومقر المصنع، مع معاينة ورفع مقاسات وحاسبة تسعير فورية وإصدار عرض سعر PDF.</li>
-        </ul>
-      </section>
 
-      {/* Unconfirmed fallback warning banner if Firestore pricing read fails */}
-      {pricingSyncStatus === 'error' && pricingErrorText && (
-        <div
-          role="alert"
-          className="bg-amber-950 text-amber-100 border-b border-amber-700 px-4 py-2.5 text-xs font-bold flex flex-wrap items-center justify-center gap-3 print:hidden"
-        >
-          <span className="flex items-center gap-1.5">
-            <AlertTriangle size={15} className="text-[#FACC15] shrink-0" />
-            <span>{pricingErrorText}</span>
-          </span>
-          <button
-            type="button"
-            onClick={loadLatestPricingFromServer}
-            className="bg-[#FACC15] hover:bg-[#E2B90F] text-[#0F172A] px-3 py-1 rounded-lg font-black text-[11px] flex items-center gap-1 cursor-pointer transition"
-          >
-            <RefreshCw size={12} />
-            <span>إعادة الاتصال وتحديث الأسعار</span>
-          </button>
-        </div>
-      )}
-
-      {/* Historical quote pricing preservation notice */}
-      {loadedQuotePricing && (
-        <div
-          role="status"
-          className="bg-[#0F172A] text-white border-b border-slate-700 px-4 py-2.5 text-xs font-bold flex flex-wrap items-center justify-center gap-3 print:hidden"
-        >
-          <span className="flex items-center gap-1.5">
-            <History size={15} className="text-[#FACC15] shrink-0" />
-            <span>
-              يتم عرض &laquo;{loadedQuotePricing.quoteName}&raquo; بالأسعار المحفوظة وقت إنشائه للحفاظ على بيانات عرض السعر السابق.
-            </span>
-          </span>
-          <button
-            type="button"
-            onClick={switchLoadedQuoteToLivePricing}
-            className="bg-[#FACC15] hover:bg-[#E2B90F] text-[#0F172A] px-3 py-1 rounded-lg font-black text-[11px] cursor-pointer transition"
-          >
-            التبديل إلى أحدث الأسعار الحالية
-          </button>
-        </div>
-      )}
 
       {/* 1. Ground-up Mobile-Dedicated View (Mobile Only < md) */}
       <MobileView
@@ -978,58 +925,64 @@ export default function App() {
 
       {/* 2. Desktop-Dedicated View (Unchanged Desktop Layout >= md, plus Canonical Print Target) */}
       <div className="hidden md:block print:block pb-24 md:pb-0 print:pb-0">
-        <Header
-          onOpenDevSettings={() => setIsDevModalOpen(true)}
-          theme={theme}
-          onToggleTheme={toggleTheme}
-          savedQuotesCount={savedQuotes.length}
-          onOpenSavedQuotes={() => setPasswordTarget('quotes')}
-          onSaveQuoteAuto={handleSaveQuoteAuto}
-          customersCount={savedCustomers.length}
-          onOpenCustomers={() => setPasswordTarget('customers')}
-          isPrimaryHeading={!isMobileViewport}
-        />
+        {activeMainTab === 'input' && (
+          <Header
+            onOpenDevSettings={() => setIsDevModalOpen(true)}
+            theme={theme}
+            onToggleTheme={toggleTheme}
+            savedQuotesCount={savedQuotes.length}
+            onOpenSavedQuotes={() => setPasswordTarget('quotes')}
+            onSaveQuoteAuto={handleSaveQuoteAuto}
+            customersCount={savedCustomers.length}
+            onOpenCustomers={() => setPasswordTarget('customers')}
+            isPrimaryHeading={!isMobileViewport}
+          />
+        )}
 
-        <main className="max-w-5xl mx-auto px-4 py-12 print:max-w-none print:p-0 print:m-0">
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-white rounded-3xl border-2 border-slate-200 border-r-8 border-r-[#0F172A] p-8 mb-12 print:hidden overflow-hidden relative shadow-sm"
-          >
-            <h2 className="text-2xl font-display font-black text-[#0F172A] mb-4 flex items-center gap-3">
-              <Calculator className="text-[#0F172A]" size={26} />
-              بوابة {BRAND_NAME} للتسعير التفاعلي
-            </h2>
-            <p className="text-slate-500 leading-relaxed text-base max-w-3xl">
-              أدخل مقاسات الفتحات لديك (العرض والارتفاع بالسنتيمتر)، ثم اختر نوع القطاع والإضافات التي ترغب بها لكل بند. سيقوم النظام تلقائياً بحساب المساحات (المتر المربع) وعرض التكلفة الإجمالية بدقة وبشفافية تامة.
-            </p>
-          </motion.div>
+        <main className={`w-full max-w-none mx-auto ${activeMainTab === 'quote' ? 'p-0' : 'px-4 sm:px-8 py-8 md:py-12'} print:max-w-none print:p-0 print:m-0 transition-all duration-500`}>
+          {activeMainTab === 'input' && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-white rounded-3xl border-2 border-slate-200 border-r-8 border-r-[#0F172A] p-8 mb-12 print:hidden overflow-hidden relative shadow-sm"
+            >
+              <h2 className="text-2xl font-display font-black text-[#0F172A] mb-4 flex items-center gap-3">
+                <Calculator className="text-[#0F172A]" size={26} />
+                بوابة {BRAND_NAME} للتسعير التفاعلي
+              </h2>
+              <p className="text-slate-500 leading-relaxed text-base max-w-3xl">
+                أدخل مقاسات الفتحات لديك (العرض والارتفاع بالسنتيمتر)، ثم اختر نوع القطاع والإضافات التي ترغب بها لكل بند. سيقوم النظام تلقائياً بحساب المساحات (المتر المربع) وعرض التكلفة الإجمالية بدقة وبشفافية تامة.
+              </p>
+            </motion.div>
+          )}
 
           {/* Navigation Tabs for adjacent pages view */}
-          <div className="flex bg-slate-200/60 p-1.5 rounded-2xl mb-8 max-w-xl mx-auto border border-slate-200/80 print:hidden shadow-inner relative justify-between gap-1.5">
-            <button
-              onClick={() => setActiveMainTab('input')}
-              className={`flex-1 py-3 px-3 sm:px-5 rounded-xl font-black text-sm transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative z-10 select-none ${
-                activeMainTab === 'input'
-                  ? 'bg-[#0F172A] text-[#FACC15] shadow-md shadow-slate-900/10'
-                  : 'text-slate-600 hover:text-[#0F172A] hover:bg-slate-200'
-              }`}
-            >
-              <Calculator size={18} />
-              <span>بيانات العميل وحساب البنود</span>
-            </button>
-            <button
-              onClick={() => setActiveMainTab('quote')}
-              className={`flex-1 py-3 px-3 sm:px-5 rounded-xl font-black text-sm transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative z-10 select-none ${
-                activeMainTab === 'quote'
-                  ? 'bg-[#0F172A] text-[#FACC15] shadow-md shadow-slate-900/10'
-                  : 'text-slate-600 hover:text-[#0F172A] hover:bg-slate-200'
-              }`}
-            >
-              <FileText size={18} />
-              <span>عرض السعر التفصيلي (PDF)</span>
-            </button>
-          </div>
+          {activeMainTab === 'input' && (
+            <div className="flex bg-slate-200/60 p-1.5 rounded-2xl mb-8 max-w-2xl mx-auto border border-slate-200/80 print:hidden shadow-inner relative justify-between gap-1.5">
+              <button
+                onClick={() => setActiveMainTab('input')}
+                className={`flex-1 py-3 px-3 sm:px-5 rounded-xl font-black text-sm transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative z-10 select-none ${
+                  activeMainTab === 'input'
+                    ? 'bg-[#0F172A] text-[#FACC15] shadow-md shadow-slate-900/10'
+                    : 'text-slate-600 hover:text-[#0F172A] hover:bg-slate-200'
+                }`}
+              >
+                <Calculator size={18} />
+                <span>بيانات العميل وحساب البنود</span>
+              </button>
+              <button
+                onClick={() => setActiveMainTab('quote')}
+                className={`flex-1 py-3 px-3 sm:px-5 rounded-xl font-black text-sm transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative z-10 select-none ${
+                  activeMainTab === 'quote'
+                    ? 'bg-[#0F172A] text-[#FACC15] shadow-md shadow-slate-900/10'
+                    : 'text-slate-600 hover:text-[#0F172A] hover:bg-slate-200'
+                }`}
+              >
+                <FileText size={18} />
+                <span>عرض السعر التفصيلي (PDF)</span>
+              </button>
+            </div>
+          )}
 
           <div className={activeMainTab === 'input' ? 'block print:hidden' : 'hidden print:hidden'}>
             {/* Official pricing table always displays the live shared Firestore catalog */}
@@ -1090,6 +1043,7 @@ export default function App() {
               formatCurrency={formatCurrency}
               profiles={effectiveProfiles}
               addons={effectiveAddons}
+              onBack={() => setActiveMainTab('input')}
             />
           </div>
 

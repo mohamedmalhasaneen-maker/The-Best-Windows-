@@ -19,6 +19,7 @@ interface Props {
   profiles: Record<string, Profile>;
   addons: Record<string, Addon>;
   isMobileViewport?: boolean;
+  onBack?: () => void;
 }
 
 // Canonical A4 Portrait dimensions at 96 DPI (210mm × 297mm -> exact 1 : 1.4142857 ratio)
@@ -38,6 +39,11 @@ interface QuotePageDescriptor {
   showTotals: boolean;
   showNotes: boolean;
   showTermsAndSignatures: boolean;
+  // Per-page totals (Almekawy Style)
+  pageItemCount: number;
+  pageItemRange: string;
+  pageTotalArea: number;
+  pageTotalPrice: number;
 }
 
 function estimateItemRowHeight(
@@ -48,34 +54,37 @@ function estimateItemRowHeight(
   const threshold = 1.0;
   const isMinArea = (item.width * item.height) / 10000 < threshold;
 
-  // Column 2 (بيان البند): Title (wrapped) + System type + Opening + Preview
-  const title = item.title || '';
-  // Narrow column (~220px), approx 26 characters per line for Arabic font
-  const titleLines = Math.max(1, Math.ceil(title.length / 26));
-  // Preview is 46x46. Title (13px) + subtext (10px) + spacing.
-  const descHeight = Math.max(48, titleLines * 16 + 24);
-
-  // Column 6 (تفاصيل القطاع): Profile name + Inner type + Glass type + Hinge panes
-  const profileName = profiles[item.profile]?.name || item.profile || '';
-  const pLines = Math.max(1, Math.ceil(profileName.length / 20));
-  const detailLines = pLines + 1 + (item.innerType !== 'panel' ? 1 : 0) + (item.opening === 'مفصلي' ? 1 : 0);
-  const detailsHeight = detailLines * 15 + 12;
-
-  // Column 7 (الإضافات): List of bullet points
+  // Complexity check for font shrinking
   const addonCount = item.addons.length;
-  // Each addon is a line (13px) + small gap
-  const addonsHeight = Math.max(1, addonCount) * 14 + 10;
+  const title = item.title || '';
+  const titleLines = Math.max(1, Math.ceil(title.length / 26) + (title.split('\n').length - 1));
+  const isComplex = addonCount > 3 || titleLines > 2;
+  
+  // Font sizes: complex ? 13px : 15px (approx line heights)
+  const lineH = isComplex ? 13 : 15;
+  const spacing = isComplex ? 6 : 8;
 
-  // Column 8 (الإجمالي): Total + Unit price + Quantity breakdown + Flat addons
+  // Column 2 (بيان البند)
+  const descHeight = Math.max(44, titleLines * lineH + (isComplex ? 16 : 20));
+
+  // Column 6 (تفاصيل القطاع)
+  const profileName = profiles[item.profile]?.name || item.profile || '';
+  const pLines = Math.max(1, Math.ceil(profileName.length / 20) + (profileName.split('\n').length - 1));
+  const detailLines = pLines + 1 + (item.innerType !== 'panel' ? 1 : 0) + (item.opening === 'مفصلي' ? 1 : 0);
+  const detailsHeight = detailLines * (lineH - 1) + spacing;
+
+  // Column 7 (الإضافات)
+  const addonsHeight = Math.max(1, addonCount) * (lineH - 2) + spacing;
+
+  // Column 8 (الإجمالي)
   const priceLines = 2 + (item.quantity && item.quantity > 1 ? 1 : 0) + (item.flatAddonsPrice ? 1 : 0);
-  const priceHeight = priceLines * 16 + 10;
+  const priceHeight = priceLines * lineH + spacing;
 
-  // Column 4 (المساحة): Area + Min Area warning
-  const areaHeight = 2 * 14 + (isMinArea ? 14 : 0) + 12;
+  // Column 4 (المساحة)
+  const areaHeight = 2 * 13 + (isMinArea ? 13 : 0) + spacing;
 
-  // Max height of all columns + vertical padding (py-1.5 is 6px each side) + borders
-  // We use 12px for padding + 2px for border line
-  return Math.max(descHeight, detailsHeight, addonsHeight, priceHeight, areaHeight) + 14;
+  // Max height of all columns + vertical padding + borders
+  return Math.max(descHeight, detailsHeight, addonsHeight, priceHeight, areaHeight) + 8;
 }
 
 function estimateNotesHeight(customer: CustomerInfo): number {
@@ -102,21 +111,23 @@ function paginateQuoteIntoA4Pages(
   profiles: Record<string, Profile>,
   addons: Record<string, Addon>
 ): QuotePageDescriptor[] {
-  // Use a very precise budget of 1030px (A4 is 1123, leaves 93px for margins and footer)
-  const SAFE_PAGE_BUDGET = 1030;
+  // Budget of 1050px (A4 is 1123, leaves space for margins and footer)
+  // Slightly increased budget to reduce gaps
+  const SAFE_PAGE_BUDGET = 1050;
   const FIRST_HEADER_HEIGHT = 195;
   const CONT_HEADER_HEIGHT = 65;
   const TABLE_HEADER_HEIGHT = 45;
+  const TABLE_SUMMARY_HEIGHT = 32; // Almekawy style per-page summary row
   const INDICATOR_HEIGHT = 15;
 
   const TOTALS_HEIGHT =
     (customer.discountValue && customer.discountValue > 0) ||
     (customer.notesAmount && customer.notesAmount !== 0) ||
     (customer.additionalNotes && customer.additionalNotes.some((n) => (n.amount || 0) !== 0))
-      ? 100
-      : 85;
+      ? 95
+      : 80;
   const NOTES_HEIGHT = estimateNotesHeight(customer);
-  const TERMS_AND_SIGNATURES_HEIGHT = 380;
+  const TERMS_AND_SIGNATURES_HEIGHT = 360;
 
   const rawPages: Omit<QuotePageDescriptor, 'pageNumber'>[] = [];
 
@@ -127,10 +138,24 @@ function paginateQuoteIntoA4Pages(
     showTotals: false,
     showNotes: false,
     showTermsAndSignatures: false,
+    pageItemCount: 0,
+    pageItemRange: '',
+    pageTotalArea: 0,
+    pageTotalPrice: 0,
   };
   let usedHeight = FIRST_HEADER_HEIGHT;
 
   const startNewPage = () => {
+    // Before finishing current page, calculate its summaries
+    if (currentPage.items.length > 0) {
+      currentPage.pageItemCount = currentPage.items.length;
+      const firstS = currentPage.items[0].serialNumber;
+      const lastS = currentPage.items[currentPage.items.length - 1].serialNumber;
+      currentPage.pageItemRange = firstS === lastS ? String(firstS) : `${firstS}-${lastS}`;
+      currentPage.pageTotalArea = currentPage.items.reduce((sum, i) => sum + i.item.area * (i.item.quantity || 1), 0);
+      currentPage.pageTotalPrice = currentPage.items.reduce((sum, i) => sum + i.item.itemTotal, 0);
+    }
+
     rawPages.push(currentPage);
     currentPage = {
       isFirstPage: false,
@@ -139,55 +164,77 @@ function paginateQuoteIntoA4Pages(
       showTotals: false,
       showNotes: false,
       showTermsAndSignatures: false,
+      pageItemCount: 0,
+      pageItemRange: '',
+      pageTotalArea: 0,
+      pageTotalPrice: 0,
     };
     usedHeight = CONT_HEADER_HEIGHT;
   };
 
-  // Step 1: Distribute items based on estimated actual heights
+  // Step 1: Greedy distribution based on actual estimated content heights
   items.forEach((item, idx) => {
     const rowH = estimateItemRowHeight(item, profiles, addons);
     const isFirstOnPage = currentPage.items.length === 0;
-    const overhead = isFirstOnPage ? TABLE_HEADER_HEIGHT : 0;
+    const overhead = isFirstOnPage ? TABLE_HEADER_HEIGHT + TABLE_SUMMARY_HEIGHT : 0;
     const serialNumber = idx + 1;
 
-    // If adding this item exceeds budget, move to next page
+    // Check if adding this item (plus future indicator) exceeds budget
     if (!isFirstOnPage && usedHeight + overhead + rowH + INDICATOR_HEIGHT > SAFE_PAGE_BUDGET) {
       currentPage.hasMoreItemsAfter = true;
       startNewPage();
     }
 
     if (currentPage.items.length === 0) {
-      usedHeight += TABLE_HEADER_HEIGHT;
+      usedHeight += TABLE_HEADER_HEIGHT + TABLE_SUMMARY_HEIGHT;
     }
 
     currentPage.items.push({ item, serialNumber });
     usedHeight += rowH;
   });
 
-  // Step 2: Determine where to place the final blocks (Totals, Notes, Terms)
-  // We treat Totals, Notes, and Terms as an atomic block to keep them together.
-  const totalBlocksHeight = TOTALS_HEIGHT + NOTES_HEIGHT + TERMS_AND_SIGNATURES_HEIGHT;
-
-  if (usedHeight + totalBlocksHeight > SAFE_PAGE_BUDGET) {
-    // If current page has items, try to move the last item to keep it company on the new page,
-    // but only if there are other items remaining on the current page to avoid leaving it empty.
-    if (currentPage.items.length > 1) {
-      const lastItem = currentPage.items.pop()!;
-      currentPage.hasMoreItemsAfter = true;
-      startNewPage();
-      currentPage.items.push(lastItem);
-      usedHeight += TABLE_HEADER_HEIGHT + estimateItemRowHeight(lastItem.item, profiles, addons);
-    } else {
-      // If only one item and it fits but the blocks don't, we start a new page just for the blocks.
-      startNewPage();
+  // Step 2: Granular placement of Totals, Notes, and Terms/Signatures
+  // Instead of one big atomic block, check them individually to fill space better
+  
+  // Try to fit Totals
+  if (usedHeight + TOTALS_HEIGHT + INDICATOR_HEIGHT > SAFE_PAGE_BUDGET) {
+    currentPage.hasMoreItemsAfter = true;
+    startNewPage();
+    // Keep professional: take the last item with us if we start a new page just for totals/footer
+    if (rawPages.length > 0 && rawPages[rawPages.length - 1].items.length > 1) {
+      const lastP = rawPages[rawPages.length - 1];
+      const movedItem = lastP.items.pop()!;
+      currentPage.items.push(movedItem);
+      usedHeight += TABLE_HEADER_HEIGHT + TABLE_SUMMARY_HEIGHT + estimateItemRowHeight(movedItem.item, profiles, addons);
     }
   }
-
   currentPage.showTotals = true;
+  usedHeight += TOTALS_HEIGHT;
+
+  // Try to fit Notes
   if (NOTES_HEIGHT > 0) {
+    if (usedHeight + NOTES_HEIGHT + INDICATOR_HEIGHT > SAFE_PAGE_BUDGET) {
+      startNewPage();
+    }
     currentPage.showNotes = true;
+    usedHeight += NOTES_HEIGHT;
+  }
+
+  // Try to fit Terms and Signatures
+  if (usedHeight + TERMS_AND_SIGNATURES_HEIGHT > SAFE_PAGE_BUDGET) {
+    startNewPage();
   }
   currentPage.showTermsAndSignatures = true;
+
+  // Final page summary calculation
+  if (currentPage.items.length > 0) {
+    currentPage.pageItemCount = currentPage.items.length;
+    const firstS = currentPage.items[0].serialNumber;
+    const lastS = currentPage.items[currentPage.items.length - 1].serialNumber;
+    currentPage.pageItemRange = firstS === lastS ? String(firstS) : `${firstS}-${lastS}`;
+    currentPage.pageTotalArea = currentPage.items.reduce((sum, i) => sum + i.item.area * (i.item.quantity || 1), 0);
+    currentPage.pageTotalPrice = currentPage.items.reduce((sum, i) => sum + i.item.itemTotal, 0);
+  }
 
   rawPages.push(currentPage);
 
@@ -628,15 +675,6 @@ function A4PageSheet({
               </div>
             </div>
 
-            {/* Introduction */}
-            <div className="my-2 text-right">
-              <p className="text-slate-600 leading-relaxed text-[11.5px]">
-                بناءً على طلبكم الكريم، يسعدنا في{' '}
-                <strong className="text-slate-900 font-black">{BRAND_NAME}</strong> تقديم عرض الأسعار والمواصفات الفنية
-                التالية للفتحات المطلوبة. جميع قطاعاتنا تركية وأوروبية معتمدة تتميز بأعلى معايير الجودة والعزل التام للأتربة
-                والصوت.
-              </p>
-            </div>
           </>
         ) : (
           /* Compact Continuation Header on Page 2+ */
@@ -692,6 +730,15 @@ function A4PageSheet({
                 {page.items.map(({ item, serialNumber }) => {
                   const threshold = 1.0;
                   const isMinArea = (item.width * item.height) / 10000 < threshold;
+                  
+                  // Shrink font if item has many details
+                  const title = item.title || '';
+                  const titleLines = Math.max(1, Math.ceil(title.length / 26) + (title.split('\n').length - 1));
+                  const isComplex = item.addons.length > 3 || titleLines > 2;
+                  const textClass = isComplex ? 'text-[9px]' : 'text-[10px]';
+                  const titleClass = isComplex ? 'text-[10.5px]' : 'text-[12px]';
+                  const badgeClass = isComplex ? 'text-[8.5px]' : 'text-[9.5px]';
+
                   return (
                     <tr key={item.id} className="bg-white">
                       <td className="py-1.5 px-1.5 text-center font-mono font-bold text-slate-400 border-l border-slate-100 tabular-nums">
@@ -701,9 +748,9 @@ function A4PageSheet({
                       <td className="py-1.5 px-2.5 border-l border-slate-100">
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-right min-w-0">
-                            <div className="font-bold text-slate-900 text-[12px] leading-snug">
+                            <div className={`font-bold text-slate-900 leading-snug ${titleClass}`}>
                               <span>{item.title}</span>
-                              <span className="text-slate-400 font-semibold text-[10px] mr-1.5">
+                              <span className={`text-slate-400 font-semibold mr-1.5 ${isComplex ? 'text-[8.5px]' : 'text-[10px]'}`}>
                                 ·{' '}
                                 {item.itemType === 'armored_door'
                                   ? 'باب مصفح'
@@ -714,36 +761,36 @@ function A4PageSheet({
                                   : 'شباك'}
                               </span>
                             </div>
-                            <div className="text-[10px] text-slate-500 mt-0.5">نظام الفتح: {item.opening}</div>
+                            <div className={`${textClass} text-slate-500 mt-0.5`}>نظام الفتح: {item.opening}</div>
                           </div>
-                          <div className="shrink-0 w-[46px] h-[46px] bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-center p-0.5">
+                          <div className={`shrink-0 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-center p-0.5 ${isComplex ? 'w-[40px] h-[40px]' : 'w-[46px] h-[46px]'}`}>
                             <MiniItemPreview item={item} />
                           </div>
                         </div>
                       </td>
 
                       <td
-                        className="py-1.5 px-1.5 text-center font-mono font-bold text-[#0F172A] border-l border-slate-100 text-[11px] tabular-nums"
+                        className={`py-1.5 px-1.5 text-center font-mono font-bold text-[#0F172A] border-l border-slate-100 tabular-nums ${isComplex ? 'text-[10px]' : 'text-[11px]'}`}
                         dir="ltr"
                       >
                         {item.width} × {item.height}
                       </td>
 
-                      <td className="py-1.5 px-1.5 text-center border-l border-slate-100 text-[11px] tabular-nums">
+                      <td className={`py-1.5 px-1.5 text-center border-l border-slate-100 tabular-nums ${isComplex ? 'text-[10px]' : 'text-[11px]'}`}>
                         <div className="font-bold text-[#0F172A]">{item.area.toFixed(2)} م²</div>
                         {isMinArea && (
-                          <div className="text-[9px] text-amber-700 font-bold mt-0.5 whitespace-nowrap">
+                          <div className={`${badgeClass} text-amber-700 font-bold mt-0.5 whitespace-nowrap`}>
                             (حد أدنى {threshold.toFixed(1)} م²)
                           </div>
                         )}
                       </td>
 
-                      <td className="py-1.5 px-1 text-center font-mono font-bold text-[#0F172A] border-l border-slate-100 text-[11px] tabular-nums">
+                      <td className={`py-1.5 px-1 text-center font-mono font-bold text-[#0F172A] border-l border-slate-100 tabular-nums ${isComplex ? 'text-[10px]' : 'text-[11px]'}`}>
                         {item.quantity || 1}
                       </td>
 
-                      <td className="py-1.5 px-2 border-l border-slate-100 text-[10px] leading-snug">
-                        <div className="font-bold text-slate-900 text-[11px]">
+                      <td className={`py-1.5 px-2 border-l border-slate-100 leading-snug ${textClass}`}>
+                        <div className={`font-bold text-slate-900 ${isComplex ? 'text-[10px]' : 'text-[11px]'}`}>
                           {profiles[item.profile]?.name || item.profile}
                         </div>
                         <div className="text-slate-500 mt-0.5">
@@ -759,7 +806,7 @@ function A4PageSheet({
                         )}
                       </td>
 
-                      <td className="py-1.5 px-2 border-l border-slate-100 text-[10px] text-slate-600 leading-snug">
+                      <td className={`py-1.5 px-2 border-l border-slate-100 text-slate-600 leading-snug ${isComplex ? 'text-[8.5px]' : 'text-[10px]'}`}>
                         {item.addons.length > 0 ? (
                           <div className="flex flex-col gap-0.5">
                             {item.addons.map((addonId) => (
@@ -774,21 +821,21 @@ function A4PageSheet({
                       </td>
 
                       <td className="py-1.5 px-2 text-left whitespace-nowrap tabular-nums">
-                        <div className="font-black text-[#0F172A] font-display text-[13px]">
+                        <div className={`font-black text-[#0F172A] font-display ${isComplex ? 'text-[11.5px]' : 'text-[13px]'}`}>
                           {formatCurrency(item.itemTotal)}
                         </div>
-                        <div className="text-[9.5px] text-slate-500 mt-0.5">
+                        <div className={`${badgeClass} text-slate-500 mt-0.5`}>
                           {item.flatProfilePrice && item.flatProfilePrice > 0
                             ? `${formatCurrency(item.flatProfilePrice)} / ${profiles[item.profile]?.unit || 'للقطعة'}`
                             : `${formatCurrency(item.profilePrice + item.addonsPrice)} / م²`}
                         </div>
                         {item.quantity && item.quantity > 1 ? (
-                          <div className="text-[9px] text-slate-500 font-bold">
+                          <div className={`${badgeClass} text-slate-500 font-bold`}>
                             ({formatCurrency(item.itemTotal / item.quantity)} × {item.quantity})
                           </div>
                         ) : null}
                         {item.flatAddonsPrice && item.flatAddonsPrice > 0 ? (
-                          <div className="text-[9px] text-emerald-700 font-bold">
+                          <div className={`${badgeClass} text-emerald-700 font-bold`}>
                             + {formatCurrency(item.flatAddonsPrice)} (مقطوع)
                           </div>
                         ) : null}
@@ -797,6 +844,17 @@ function A4PageSheet({
                   );
                 })}
               </tbody>
+              {/* Almekawy Style Per-Page Summary Row */}
+              <tfoot>
+                <tr className="bg-slate-50 border-t border-slate-900 text-[10.5px] font-bold text-slate-700">
+                  <td colSpan={8} className="py-2 px-6 text-left">
+                    <span className="text-slate-400 ml-2">إجمالي الصفحة:</span>
+                    <span className="text-[#0F172A] font-black font-display text-[12px]">
+                      {formatCurrency(page.pageTotalPrice)}
+                    </span>
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         )}
@@ -807,38 +865,41 @@ function A4PageSheet({
           </div>
         )}
 
-        {/* Grand Total Area and Calculations */}
+        {/* Grand Total Area and Calculations (Enhanced Almekawy Style Financial Summary) */}
         {page.showTotals && (
-          <div className="bg-[#0F172A] text-white rounded-xl px-5 py-3 flex flex-row justify-between items-center gap-4">
+          <div className="bg-[#0F172A] text-white rounded-2xl border-2 border-[#F59E0B] px-6 py-4 flex flex-row justify-between items-center gap-6 shadow-md relative overflow-hidden">
+            {/* Background Decorative Accent */}
+            <div className="absolute top-0 left-0 w-2 h-full bg-[#F59E0B]" />
+            
             <div className="text-right">
-              <h4 className="font-display font-black text-base text-white">مجموع مسطحات الأعمال</h4>
-              <p className="text-slate-300 text-[11px] mt-0.5">إجمالي المساحة الفعلية وصافي القيمة المعتمدة للعرض:</p>
+              <h4 className="font-display font-black text-lg text-[#FACC15] tracking-tight">الملخص المالي وإجمالي المسطحات</h4>
+              <p className="text-slate-300 text-[10.5px] mt-1 font-bold">صافي القيمة المعتمدة لكافة الأعمال الواردة بالعرض:</p>
             </div>
 
-            <div className="flex flex-wrap items-center justify-end gap-x-5 gap-y-2 shrink-0 tabular-nums">
+            <div className="flex flex-wrap items-center justify-end gap-x-6 gap-y-2 shrink-0 tabular-nums">
               <div className="text-right">
-                <span className="text-[10px] text-slate-300 font-bold block mb-0.5">إجمالي الأمتار</span>
-                <span className="text-lg font-black font-mono leading-none text-white" dir="ltr">
+                <span className="text-[10px] text-slate-400 font-black block mb-0.5 uppercase tracking-wider">إجمالي الأمتار</span>
+                <span className="text-xl font-black font-mono leading-none text-white" dir="ltr">
                   {calculations.totalArea.toFixed(2)} m²
                 </span>
               </div>
 
               {discountValue > 0 || totalNotesAmount !== 0 ? (
                 <>
-                  <div className="bg-slate-700 h-8 w-[1px]" />
+                  <div className="bg-slate-700 h-10 w-[1px]" />
                   <div className="text-right">
-                    <span className="text-[10px] text-slate-300 font-bold block mb-0.5">قبل الخصم</span>
-                    <span className="text-sm font-bold font-mono leading-none text-slate-200" dir="ltr">
+                    <span className="text-[10px] text-slate-400 font-black block mb-0.5">قبل الخصم</span>
+                    <span className="text-[13px] font-bold font-mono leading-none text-slate-300 line-through decoration-red-500/50" dir="ltr">
                       {formatCurrency(calculations.totalPrice)}
                     </span>
                   </div>
 
                   {discountValue > 0 && (
                     <>
-                      <div className="bg-slate-700 h-8 w-[1px]" />
+                      <div className="bg-slate-700 h-10 w-[1px]" />
                       <div className="text-right">
-                        <span className="text-[10px] text-emerald-300 font-bold block mb-0.5">خصم خاص</span>
-                        <span className="text-sm font-bold font-mono leading-none text-emerald-300">
+                        <span className="text-[10px] text-emerald-400 font-black block mb-0.5">خصم خاص</span>
+                        <span className="text-[13px] font-bold font-mono leading-none text-emerald-400">
                           - {formatCurrency(discountAmount)}
                         </span>
                       </div>
@@ -847,10 +908,10 @@ function A4PageSheet({
 
                   {totalNotesAmount !== 0 && (
                     <>
-                      <div className="bg-slate-700 h-8 w-[1px]" />
+                      <div className="bg-slate-700 h-10 w-[1px]" />
                       <div className="text-right">
-                        <span className="text-[10px] text-sky-300 font-bold block mb-0.5">تسويات الملاحظات</span>
-                        <span className="text-sm font-bold font-mono leading-none text-sky-300" dir="ltr">
+                        <span className="text-[10px] text-sky-400 font-black block mb-0.5">تسويات</span>
+                        <span className="text-[13px] font-bold font-mono leading-none text-sky-400" dir="ltr">
                           {totalNotesAmount > 0 ? '+' : ''}
                           {formatCurrency(totalNotesAmount)}
                         </span>
@@ -858,20 +919,20 @@ function A4PageSheet({
                     </>
                   )}
 
-                  <div className="bg-slate-700 h-8 w-[1px]" />
+                  <div className="bg-slate-700 h-10 w-[1px]" />
                   <div className="text-right">
-                    <span className="text-[10px] text-[#F59E0B] font-black block mb-0.5">صافي القيمة النهائية</span>
-                    <span className="text-2xl font-black font-display text-[#F59E0B] leading-none">
+                    <span className="text-[10px] text-[#F59E0B] font-black block mb-0.5 tracking-wide">صافي القيمة النهائية</span>
+                    <span className="text-3xl font-black font-display text-[#F59E0B] leading-none drop-shadow-sm">
                       {formatCurrency(finalPrice)}
                     </span>
                   </div>
                 </>
               ) : (
                 <>
-                  <div className="bg-slate-700 h-8 w-[1px]" />
+                  <div className="bg-slate-700 h-10 w-[1px]" />
                   <div className="text-right">
-                    <span className="text-[10px] text-[#F59E0B] font-black block mb-0.5">صافي القيمة الكلية</span>
-                    <span className="text-2xl font-black font-display text-[#F59E0B] leading-none">
+                    <span className="text-[10px] text-[#F59E0B] font-black block mb-0.5 tracking-wide">صافي القيمة الكلية</span>
+                    <span className="text-3xl font-black font-display text-[#F59E0B] leading-none drop-shadow-sm">
                       {formatCurrency(calculations.totalPrice)}
                     </span>
                   </div>
@@ -1022,6 +1083,7 @@ export default function DetailedQuoteView({
   profiles,
   addons,
   isMobileViewport = false,
+  onBack,
 }: Props) {
   const [currentPageIndex, setCurrentPageIndex] = React.useState(0);
   const [exportState, setExportState] = React.useState<'idle' | 'downloading' | 'preparing-share' | 'ready-to-share'>('idle');
@@ -1231,17 +1293,20 @@ export default function DetailedQuoteView({
     if (typeof navigator === 'undefined' || !navigator.share) return;
 
     // Phase 2: Actual synchronous share call
+    // Must be at the very top of the async function to maintain gesture context
     if (exportState === 'ready-to-share' && preparedShareFile) {
       try {
-        if (navigator.canShare && navigator.canShare({ files: [preparedShareFile] })) {
-          await navigator.share({
-            title: `عرض سعر - ${BRAND_NAME}`,
-            text: `عرض سعر تفصيلي من ${BRAND_NAME} للعميل ${customer.name || 'الكريم'}`,
-            files: [preparedShareFile],
-          });
+        const shareData: ShareData = {
+          title: `عرض سعر - ${BRAND_NAME}`,
+          text: `عرض سعر تفصيلي من ${BRAND_NAME} للعميل ${customer.name || 'الكريم'}`,
+          files: [preparedShareFile],
+        };
+
+        if (navigator.canShare && navigator.canShare(shareData)) {
+          await navigator.share(shareData);
         } else {
           await navigator.share({
-            title: `عرض سعر - ${BRAND_NAME}`,
+            title: shareData.title,
             text: `عرض سعر تفصيلي من ${BRAND_NAME}\nالعميل: ${
               customer.name || 'عميلنا الكريم'
             }\nرقم العرض: ${quoteNumber}\nصافي القيمة: ${formatCurrency(finalPrice)}`,
@@ -1261,6 +1326,8 @@ export default function DetailedQuoteView({
     if (exportState !== 'idle') return;
     setExportState('preparing-share');
     try {
+      // Small delay to ensure UI update
+      await new Promise(r => setTimeout(r, 100));
       const { pdf, fileName } = await buildPdfDocument(2);
       const blob = pdf.output('blob');
       const file = new File([blob], fileName, { type: 'application/pdf' });
@@ -1281,7 +1348,7 @@ export default function DetailedQuoteView({
         className="print:hidden w-full max-w-full box-border flex flex-col bg-[#F1F5F9] rounded-2xl sm:rounded-3xl border border-slate-200 overflow-hidden shadow-sm"
       >
         {/* Top Preview Bar */}
-        <header className="bg-[#0F172A] text-white px-3.5 sm:px-5 min-h-[52px] sm:min-h-[60px] py-2 flex items-center justify-between gap-2 border-b border-slate-800 shrink-0 box-border">
+        <header className="bg-[#0F172A] text-white px-3.5 sm:px-5 min-h-[52px] sm:min-h-[60px] py-2 flex items-center justify-between gap-4 border-b border-slate-800 shrink-0 box-border">
           <div className="min-w-0 flex-1 text-right">
             <div className="flex items-center gap-1.5">
               <FileText size={16} className="text-[#FACC15] shrink-0" />
@@ -1295,6 +1362,16 @@ export default function DetailedQuoteView({
               </span>
             </div>
           </div>
+
+          {onBack && (
+            <button
+              onClick={onBack}
+              className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl text-xs font-black flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <ChevronRight size={16} />
+              <span>العودة للتعديل</span>
+            </button>
+          )}
         </header>
 
         {/* Central A4 Stage — Always Fit-to-Width with Zero Horizontal Scroll */}
