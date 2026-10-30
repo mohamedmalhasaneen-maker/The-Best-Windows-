@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Plus, Calculator, QrCode, FileText, AlertTriangle, RefreshCw, History } from 'lucide-react';
+import { flushSync } from 'react-dom';
+import { Plus, Calculator, QrCode, FileText } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 import {
@@ -165,7 +166,7 @@ export default function App() {
         setPricingErrorText(null);
       }
     } catch (err) {
-      console.error('Failed to fetch authoritative pricing from Firestore:', err);
+      console.warn('[Pricing] Could not fetch authoritative pricing from Firestore:', err);
       if (pricingVersionRef.current === 0) {
         setPricingSyncStatus('error');
         setPricingErrorText(
@@ -184,6 +185,13 @@ export default function App() {
 
     loadLatestPricingFromServer();
 
+    const handleOnline = () => {
+      if (pricingVersionRef.current === 0) {
+        void loadLatestPricingFromServer();
+      }
+    };
+    window.addEventListener('online', handleOnline);
+
     const unsubscribePricing = subscribeToPricing(
       (livePricing) => {
         applyConfirmedPricing(livePricing);
@@ -199,6 +207,7 @@ export default function App() {
     );
 
     return () => {
+      window.removeEventListener('online', handleOnline);
       if (typeof unsubscribePricing === 'function') unsubscribePricing();
     };
   }, [applyConfirmedPricing, loadLatestPricingFromServer]);
@@ -298,32 +307,37 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Initial fetch from cloud/server for both quotes and customers
-    fetchQuotesFromAllSources();
-    fetchCustomersFromAllSources();
+    let unsubscribeQuotes: (() => void) | undefined;
+    let unsubscribeCustomers: (() => void) | undefined;
 
-    // Subscribe to real-time Firestore updates for quotes
-    const unsubscribeQuotes = subscribeToQuotes((liveQuotes) => {
-      if (liveQuotes && liveQuotes.length > 0) {
-        setSavedQuotes(liveQuotes);
-        syncCustomersFromQuotesList(liveQuotes);
-        try {
-          localStorage.setItem('almekawy_saved_quotes', JSON.stringify(liveQuotes));
-        } catch (e) {}
-      }
-    });
+    // Defer secondary quotes/customers listeners slightly so authoritative pricing completes first
+    const initTimer = window.setTimeout(() => {
+      unsubscribeQuotes = subscribeToQuotes((liveQuotes) => {
+        if (liveQuotes && liveQuotes.length > 0) {
+          setSavedQuotes(liveQuotes);
+          syncCustomersFromQuotesList(liveQuotes);
+          try {
+            localStorage.setItem('almekawy_saved_quotes', JSON.stringify(liveQuotes));
+          } catch (e) {}
+        } else {
+          fetchQuotesFromAllSources();
+        }
+      });
 
-    // Subscribe to real-time Firestore updates for customers
-    const unsubscribeCustomers = subscribeToCustomers((liveCustomers) => {
-      if (liveCustomers && liveCustomers.length > 0) {
-        setSavedCustomers(liveCustomers);
-        try {
-          localStorage.setItem('almekawy_saved_customers', JSON.stringify(liveCustomers));
-        } catch (e) {}
-      }
-    });
+      unsubscribeCustomers = subscribeToCustomers((liveCustomers) => {
+        if (liveCustomers && liveCustomers.length > 0) {
+          setSavedCustomers(liveCustomers);
+          try {
+            localStorage.setItem('almekawy_saved_customers', JSON.stringify(liveCustomers));
+          } catch (e) {}
+        } else {
+          fetchCustomersFromAllSources();
+        }
+      });
+    }, 400);
 
     return () => {
+      window.clearTimeout(initTimer);
       if (typeof unsubscribeQuotes === 'function') unsubscribeQuotes();
       if (typeof unsubscribeCustomers === 'function') unsubscribeCustomers();
     };
@@ -362,6 +376,7 @@ export default function App() {
     if (typeof window === 'undefined' || !window.matchMedia) return false;
     return window.matchMedia('(max-width: 767px)').matches;
   });
+  const [isNativePrinting, setIsNativePrinting] = useState(false);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return;
@@ -370,6 +385,24 @@ export default function App() {
     setIsMobileViewport(mq.matches);
     mq.addEventListener('change', handleChange);
     return () => mq.removeEventListener('change', handleChange);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleBeforePrint = () => {
+      flushSync(() => {
+        setIsNativePrinting(true);
+      });
+    };
+    const handleAfterPrint = () => {
+      setIsNativePrinting(false);
+    };
+    window.addEventListener('beforeprint', handleBeforePrint);
+    window.addEventListener('afterprint', handleAfterPrint);
+    return () => {
+      window.removeEventListener('beforeprint', handleBeforePrint);
+      window.removeEventListener('afterprint', handleAfterPrint);
+    };
   }, []);
 
   const handleSavePrices = async (
@@ -891,37 +924,39 @@ export default function App() {
     >
 
 
-      {/* 1. Ground-up Mobile-Dedicated View (Mobile Only < md) */}
-      <MobileView
-        customer={customer}
-        items={items}
-        calculations={calculations}
-        profiles={effectiveProfiles}
-        addons={effectiveAddons}
-        savedQuotes={savedQuotes}
-        savedCustomers={savedCustomers}
-        theme={theme}
-        onToggleTheme={toggleTheme}
-        handleCustomerChange={handleCustomerChange}
-        updateItem={updateItem}
-        removeItem={removeItem}
-        addNewItem={addNewItem}
-        toggleAddon={toggleAddon}
-        handleSaveQuoteAuto={handleSaveQuoteAuto}
-        handleSaveCurrentQuote={handleSaveCurrentQuote}
-        onOpenDevSettings={() => setIsDevModalOpen(true)}
-        onOpenSavedQuotes={() => setPasswordTarget('quotes')}
-        onOpenCustomers={() => setPasswordTarget('customers')}
-        onOpenQr={() => setIsQrModalOpen(true)}
-        handlePrint={handlePrint}
-        activeMainTab={activeMainTab}
-        setActiveMainTab={setActiveMainTab}
-        formatCurrency={formatCurrency}
-        handleSelectCustomer={handleSelectCustomer}
-        handleSaveCustomerFromForm={handleSaveCustomerFromForm}
-        onDuplicateItem={handleDuplicateItem}
-        isPrimaryHeading={isMobileViewport}
-      />
+      {/* 1. Ground-up Mobile-Dedicated View (Mounted strictly on mobile viewports < md) */}
+      {isMobileViewport && (
+        <MobileView
+          customer={customer}
+          items={items}
+          calculations={calculations}
+          profiles={effectiveProfiles}
+          addons={effectiveAddons}
+          savedQuotes={savedQuotes}
+          savedCustomers={savedCustomers}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          handleCustomerChange={handleCustomerChange}
+          updateItem={updateItem}
+          removeItem={removeItem}
+          addNewItem={addNewItem}
+          toggleAddon={toggleAddon}
+          handleSaveQuoteAuto={handleSaveQuoteAuto}
+          handleSaveCurrentQuote={handleSaveCurrentQuote}
+          onOpenDevSettings={() => setIsDevModalOpen(true)}
+          onOpenSavedQuotes={() => setPasswordTarget('quotes')}
+          onOpenCustomers={() => setPasswordTarget('customers')}
+          onOpenQr={() => setIsQrModalOpen(true)}
+          handlePrint={handlePrint}
+          activeMainTab={activeMainTab}
+          setActiveMainTab={setActiveMainTab}
+          formatCurrency={formatCurrency}
+          handleSelectCustomer={handleSelectCustomer}
+          handleSaveCustomerFromForm={handleSaveCustomerFromForm}
+          onDuplicateItem={handleDuplicateItem}
+          isPrimaryHeading={isMobileViewport}
+        />
+      )}
 
       {/* 2. Desktop-Dedicated View (Unchanged Desktop Layout >= md, plus Canonical Print Target) */}
       <div className="hidden md:block print:block pb-24 md:pb-0 print:pb-0">
@@ -1036,16 +1071,18 @@ export default function App() {
             />
           </div>
 
-          <div className={activeMainTab === 'quote' ? 'block' : 'hidden print:block'}>
-            <DetailedQuoteView
-              customer={customer}
-              calculations={calculations}
-              formatCurrency={formatCurrency}
-              profiles={effectiveProfiles}
-              addons={effectiveAddons}
-              onBack={() => setActiveMainTab('input')}
-            />
-          </div>
+          {(activeMainTab === 'quote' || isNativePrinting || isMobileViewport) && (
+            <div className={activeMainTab === 'quote' ? 'block' : 'hidden print:block'}>
+              <DetailedQuoteView
+                customer={customer}
+                calculations={calculations}
+                formatCurrency={formatCurrency}
+                profiles={effectiveProfiles}
+                addons={effectiveAddons}
+                onBack={() => setActiveMainTab('input')}
+              />
+            </div>
+          )}
 
           <div className="print:hidden">
             <Features />

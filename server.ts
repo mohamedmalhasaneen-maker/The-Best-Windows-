@@ -75,6 +75,39 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Live Authoritative Pricing Relay Endpoint (reads directly from Firestore REST v1 with no-store)
+  app.get("/api/pricing", async (_req, res) => {
+    try {
+      const cfgPath = path.join(process.cwd(), "firebase-applet-config.json");
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+      const dbSegment = cfg.firestoreDatabaseId || "(default)";
+      const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+        cfg.projectId
+      )}/databases/${encodeURIComponent(
+        dbSegment
+      )}/documents/settings/pricing?key=${encodeURIComponent(cfg.apiKey)}`;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      try {
+        const upstream = await fetch(url, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+        if (upstream.status === 404) {
+          return res.status(404).json({ exists: false });
+        }
+        const text = await upstream.text();
+        return res.status(upstream.status).type("application/json; charset=utf-8").send(text);
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (err: any) {
+      return res.status(502).json({ error: err?.message || "تعذر الاتصال بقاعدة البيانات" });
+    }
+  });
+
   // Quotes API Endpoints
   app.get("/api/quotes", (req, res) => {
     const quotes = readSavedQuotes();

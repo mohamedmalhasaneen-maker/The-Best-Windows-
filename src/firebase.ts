@@ -27,13 +27,14 @@ const dbId =
     ? firebaseConfig.firestoreDatabaseId
     : undefined;
 
-// Initialize Firestore with long-polling to prevent 10s connection timeout in browser/iframe
+// Use experimentalAutoDetectLongPolling so modern browsers use fast HTTP/2 streams
+// and only fall back to XHR long-polling when a proxy/iframe requires it
 let firestoreDb;
 try {
   firestoreDb = initializeFirestore(
     app,
     {
-      experimentalForceLongPolling: true,
+      experimentalAutoDetectLongPolling: true,
     },
     dbId
   );
@@ -51,7 +52,10 @@ async function testConnection() {
     }
   }
 }
-testConnection();
+// Defer diagnostic connection ping slightly so critical initial pricing read gets immediate priority
+setTimeout(() => {
+  void testConnection();
+}, 1200);
 
 const QUOTES_COLLECTION = 'quotes';
 const CUSTOMERS_COLLECTION = 'customers';
@@ -466,6 +470,126 @@ function reconstructOrderedPricing(data: Record<string, any>): PricingConfig {
   };
 }
 
+function decodeFirestoreRestValue(val: any): any {
+  if (!val || typeof val !== 'object') return undefined;
+  if ('stringValue' in val) return String(val.stringValue);
+  if ('integerValue' in val) return Number(val.integerValue);
+  if ('doubleValue' in val) return Number(val.doubleValue);
+  if ('booleanValue' in val) return Boolean(val.booleanValue);
+  if ('nullValue' in val) return null;
+  if ('timestampValue' in val) return String(val.timestampValue);
+  if ('arrayValue' in val) {
+    const arr = val.arrayValue?.values;
+    return Array.isArray(arr) ? arr.map((item: any) => decodeFirestoreRestValue(item)) : [];
+  }
+  if ('mapValue' in val) {
+    const out: Record<string, any> = {};
+    const fields = val.mapValue?.fields;
+    if (fields && typeof fields === 'object') {
+      for (const [k, childVal] of Object.entries(fields)) {
+        out[k] = decodeFirestoreRestValue(childVal);
+      }
+    }
+    return out;
+  }
+  return undefined;
+}
+
+function decodeFirestoreRestDocument(docJson: any): Record<string, any> | null {
+  if (!docJson || typeof docJson !== 'object' || !docJson.fields) {
+    return null;
+  }
+  return decodeFirestoreRestValue({ mapValue: { fields: docJson.fields } }) || null;
+}
+
+function isPermissionDeniedError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  const code = (error as { code?: string })?.code?.toLowerCase() || '';
+  return (
+    code.includes('permission-denied') ||
+    msg.includes('permission-denied') ||
+    msg.includes('missing or insufficient permissions') ||
+    msg.includes('http 403')
+  );
+}
+
+async function fetchPricingDocViaRestUrl(
+  url: string,
+  timeoutMs: number
+): Promise<{ exists: boolean; data: Record<string, any> | null }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (res.status === 404) {
+      return { exists: false, data: null };
+    }
+    if (!res.ok) {
+      throw new Error(`Firestore REST HTTP ${res.status}`);
+    }
+    const json = await res.json();
+    if (json && json.exists === false) {
+      return { exists: false, data: null };
+    }
+    return { exists: true, data: decodeFirestoreRestDocument(json) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Reads the live authoritative `settings/pricing` document directly from Firestore server,
+ * racing the Firestore SDK `getDocFromServer` with a stateless Firestore REST v1 HTTPS GET
+ * (and same-origin `/api/pricing` fallback if client ISP throttles googleapis WebChannel).
+ */
+async function readAuthoritativePricingDocData(): Promise<{
+  exists: boolean;
+  data: Record<string, any> | null;
+}> {
+  const pricingRef = doc(db, SETTINGS_COLLECTION, PRICING_DOC_ID);
+  const dbSegment = firebaseConfig.firestoreDatabaseId || '(default)';
+  const directRestUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+    firebaseConfig.projectId
+  )}/databases/${encodeURIComponent(
+    dbSegment
+  )}/documents/${SETTINGS_COLLECTION}/${PRICING_DOC_ID}?key=${encodeURIComponent(
+    firebaseConfig.apiKey
+  )}`;
+
+  const sdkPromise = withTimeout(
+    getDocFromServer(pricingRef),
+    9000,
+    'انتهت مهلة قراءة SDK من قاعدة البيانات.'
+  ).then((snap) => ({
+    exists: snap.exists(),
+    data: snap.exists() ? (snap.data() as Record<string, any>) : null,
+  }));
+
+  const directRestPromise = fetchPricingDocViaRestUrl(directRestUrl, 6500);
+
+  try {
+    return await Promise.any([directRestPromise, sdkPromise]);
+  } catch (aggregateErr: any) {
+    const subErrors: unknown[] = Array.isArray(aggregateErr?.errors)
+      ? aggregateErr.errors
+      : [aggregateErr];
+    const permErr = subErrors.find(isPermissionDeniedError);
+    if (permErr) {
+      throw permErr;
+    }
+
+    // Fallback to same-origin backend relay (/api/pricing -> live Firestore REST v1)
+    if (typeof window !== 'undefined') {
+      return await fetchPricingDocViaRestUrl('/api/pricing', 7500);
+    }
+    throw new Error('انتهت مهلة الاتصال بقاعدة البيانات لتحميل الأسعار.');
+  }
+}
+
 /**
  * Reads the authoritative shared pricing configuration directly from Firestore server
  * (bypassing any stale browser cache).
@@ -475,29 +599,25 @@ export async function fetchPricingFromCloud(): Promise<PricingConfig | null> {
     throw new Error('لا يوجد اتصال بالإنترنت لتحميل أحدث الأسعار من قاعدة البيانات.');
   }
 
-  const pricingRef = doc(db, SETTINGS_COLLECTION, PRICING_DOC_ID);
   try {
-    const snap = await withTimeout(
-      getDocFromServer(pricingRef),
-      12000,
-      'انتهت مهلة الاتصال بقاعدة البيانات لتحميل الأسعار.'
-    );
-    if (!snap.exists()) {
+    const result = await readAuthoritativePricingDocData();
+    if (!result.exists || !result.data) {
       return null;
     }
-    const config = reconstructOrderedPricing(snap.data());
+    const config = reconstructOrderedPricing(result.data);
     if (Object.keys(config.profiles).length === 0) {
       return null;
     }
     return config;
   } catch (error) {
-    console.error(
-      'Firestore Error: ',
-      JSON.stringify(
-        buildFirestoreErrorInfo(error, OperationType.GET, `${SETTINGS_COLLECTION}/${PRICING_DOC_ID}`)
-      )
+    if (isPermissionDeniedError(error)) {
+      handleFirestoreError(error, OperationType.GET, `${SETTINGS_COLLECTION}/${PRICING_DOC_ID}`);
+    }
+    console.warn(
+      '[Firestore] Transient issue loading pricing from cloud:',
+      error instanceof Error ? error.message : String(error)
     );
-    throw error;
+    throw new Error('انتهت مهلة الاتصال بقاعدة البيانات لتحميل الأسعار.');
   }
 }
 
@@ -528,6 +648,9 @@ export function subscribeToPricing(
       },
       (err) => {
         console.warn('[Firestore] Pricing realtime subscription error:', err);
+        if (isPermissionDeniedError(err)) {
+          handleFirestoreError(err, OperationType.GET, `${SETTINGS_COLLECTION}/${PRICING_DOC_ID}`);
+        }
         if (onError) {
           onError(err);
         }
@@ -566,12 +689,9 @@ export async function savePricingToCloud(
 
   try {
     // 1. Read authoritative server version to guarantee strictly monotonic version increment
-    const currentSnap = await withTimeout(
-      getDocFromServer(pricingRef),
-      12000,
-      'انتهت مهلة القراءة من قاعدة البيانات قبل الحفظ. يرجى التحقق من الاتصال والمحاولة مرة أخرى.'
-    );
-    const currentVersion = currentSnap.exists() ? Number(currentSnap.data()?.version) || 0 : 0;
+    const currentDoc = await readAuthoritativePricingDocData();
+    const currentVersion =
+      currentDoc.exists && currentDoc.data ? Number(currentDoc.data.version) || 0 : 0;
     const nextVersion = currentVersion + 1;
     const updatedAt = new Date().toISOString();
 
@@ -593,34 +713,38 @@ export async function savePricingToCloud(
 
     await withTimeout(
       batch.commit(),
-      15000,
+      20000,
       'انتهت مهلة حفظ التعديلات في قاعدة البيانات. لم يتم تأكيد الحفظ، يرجى المحاولة مرة أخرى.'
     );
 
     // 3. Re-read directly from Firestore server to confirm persistence
-    const confirmedSnap = await withTimeout(
-      getDocFromServer(pricingRef),
-      12000,
-      'تم إرسال التعديلات ولكن تعذر تأكيد قراءتها من الخادم. يرجى التحقق من الاتصال.'
-    );
+    const confirmedDoc = await readAuthoritativePricingDocData();
 
-    if (!confirmedSnap.exists()) {
+    if (!confirmedDoc.exists || !confirmedDoc.data) {
       throw new Error('لم يتم العثور على سجل الأسعار في قاعدة البيانات بعد الحفظ.');
     }
 
-    const confirmedConfig = reconstructOrderedPricing(confirmedSnap.data());
+    const confirmedConfig = reconstructOrderedPricing(confirmedDoc.data);
     if (confirmedConfig.version < nextVersion) {
       throw new Error('لم يتم تأكيد تحديث رقم إصدار الأسعار على الخادم.');
     }
 
     return confirmedConfig;
   } catch (error) {
-    console.error(
-      'Firestore Error: ',
-      JSON.stringify(
-        buildFirestoreErrorInfo(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/${PRICING_DOC_ID}`)
-      )
-    );
+    if (isPermissionDeniedError(error)) {
+      console.error(
+        'Firestore Error: ',
+        JSON.stringify(
+          buildFirestoreErrorInfo(
+            error,
+            OperationType.WRITE,
+            `${SETTINGS_COLLECTION}/${PRICING_DOC_ID}`
+          )
+        )
+      );
+    } else {
+      console.warn('[Firestore] Error saving pricing to cloud:', error);
+    }
 
     const msg = error instanceof Error ? error.message : String(error);
     const lower = msg.toLowerCase();

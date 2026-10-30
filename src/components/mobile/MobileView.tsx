@@ -184,6 +184,7 @@ export const MobileView: React.FC<MobileViewProps> = ({
             profiles={profiles}
             addons={addons}
             isMobileViewport
+            onBack={() => setActiveMainTab('input')}
           />
         )}
       </main>

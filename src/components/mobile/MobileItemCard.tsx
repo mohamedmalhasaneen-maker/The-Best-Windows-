@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   Trash2, 
   Copy, 
@@ -7,16 +7,14 @@ import {
   SlidersHorizontal, 
   Check, 
   Eye, 
-  EyeOff, 
-  Maximize2, 
-  Sparkles,
-  Layers,
-  Ruler
+  Ruler,
+  AlertTriangle
 } from 'lucide-react';
 import { CalculatedItem, Profile, Addon } from '../../types';
 import { GLASS_TYPES, OPENING_TYPES } from '../../constants';
 import { motion, AnimatePresence } from 'motion/react';
 import { DynamicPreview } from '../DynamicPreview';
+import { computeItemRowAutoFit } from '../../utils/itemAutoFit';
 
 interface MobileItemCardProps {
   item: CalculatedItem;
@@ -46,6 +44,10 @@ export const MobileItemCard: React.FC<MobileItemCardProps> = ({
   const [showPreview, setShowPreview] = useState(false);
 
   const activeAddonsCount = item.addons.filter(key => addons[key]).length;
+  const rowAutoFit = useMemo(
+    () => computeItemRowAutoFit(item, profiles, addons, formatCurrency),
+    [item, profiles, addons, formatCurrency]
+  );
 
   const getAddonStatus = (key: string) => {
     const isDoubleGlass = key === 'doubleGlass';
@@ -131,22 +133,22 @@ export const MobileItemCard: React.FC<MobileItemCardProps> = ({
       dir="rtl"
     >
       {/* Top Header Card Bar */}
-      <div className="bg-[#0F172A] text-white p-3 flex items-center justify-between gap-2 border-b-2 border-[#FACC15]">
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          <span className="bg-[#FACC15] text-[#0F172A] text-xs font-black px-2 py-0.5 rounded-lg shrink-0">
+      <div className="bg-[#0F172A] text-white p-3 flex items-start justify-between gap-2 border-b-2 border-[#FACC15]">
+        <div className="flex items-start gap-2 flex-1 min-w-0">
+          <span className="bg-[#FACC15] text-[#0F172A] text-xs font-black px-2 py-0.5 rounded-lg shrink-0 mt-1">
             بند {itemNumber}
           </span>
-          <input
-            type="text"
+          <textarea
+            rows={Math.min(4, Math.max(1, (item.title || '').split('\n').length))}
             value={item.title}
             onChange={(e) => updateItem(item.id, 'title', e.target.value)}
-            className="bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-white font-extrabold text-xs p-1.5 rounded-xl outline-none focus:border-[#FACC15] w-full min-w-0"
-            placeholder="اسم البند (مثال: شباك غرفة المعيشة)"
+            className="bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-white font-extrabold text-xs p-1.5 rounded-xl outline-none focus:border-[#FACC15] w-full min-w-0 resize-none leading-snug"
+            placeholder="اسم ووصف البند (مثال: شباك غرفة المعيشة)"
           />
         </div>
 
         {/* Top Header Action Buttons */}
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-1 shrink-0 mt-0.5">
           <button
             type="button"
             onClick={() => setShowPreview(!showPreview)}
@@ -181,6 +183,19 @@ export const MobileItemCard: React.FC<MobileItemCardProps> = ({
           </button>
         </div>
       </div>
+
+      {rowAutoFit.hasOverflow && (
+        <div
+          role="alert"
+          className="bg-amber-50 border-b border-amber-200 px-3.5 py-2 flex items-start gap-2 text-amber-950 text-[11px] font-bold"
+        >
+          <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+          <p className="leading-relaxed">
+            <span className="font-black">تنبيه مساحة الـ PDF: </span>
+            محتوى البند ({rowAutoFit.overflowColumns.join('، ')}) يتجاوز المساحة المخصصة حتى عند أصغر خط (7px). يُرجى اختصار النص.
+          </p>
+        </div>
+      )}
 
       {/* Dynamic Visual Preview Collapsible */}
       <AnimatePresence>

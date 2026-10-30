@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
-import { Trash2, ChevronDown, ChevronUp, Sliders, Check } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Trash2, ChevronDown, ChevronUp, Sliders, Check, AlertTriangle } from 'lucide-react';
 import { CalculatedItem, Profile, Addon } from '../types';
 import { GLASS_TYPES, OPENING_TYPES } from '../constants';
 import { motion, AnimatePresence } from 'motion/react';
 import { DynamicPreview } from './DynamicPreview';
+import { computeItemRowAutoFit } from '../utils/itemAutoFit';
 
 interface Props {
   item: CalculatedItem;
@@ -21,6 +22,10 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
   const [isAddonsOpen, setIsAddonsOpen] = useState(false);
 
   const activeAddons = item.addons.filter(key => addons[key]);
+  const rowAutoFit = useMemo(
+    () => computeItemRowAutoFit(item, profiles, addons, formatCurrency),
+    [item, profiles, addons, formatCurrency]
+  );
 
   const getAddonStatus = (key: string) => {
     const isDoubleGlass = key === 'doubleGlass';
@@ -116,26 +121,39 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
       className="bg-white rounded-3xl border-2 border-slate-200 overflow-hidden shadow-sm hover:border-[#FACC15] border-r-8 border-r-[#FACC15] transition-all duration-300 print:shadow-none print:border-b print:rounded-none print:mb-8"
     >
       <div className="bg-[#F8F9FA] px-6 py-4 border-b-2 border-slate-200 flex justify-between items-center print:bg-white print:border-slate-800">
-        <div className="flex items-center gap-4 flex-1">
-          <div className="w-10 h-10 bg-slate-200/60 rounded-xl flex items-center justify-center font-black text-lg text-slate-500 print:hidden">
+        <div className="flex items-start sm:items-center gap-4 flex-1 min-w-0">
+          <div className="w-10 h-10 bg-slate-200/60 rounded-xl flex items-center justify-center font-black text-lg text-slate-500 shrink-0 print:hidden">
             {itemNumber}
           </div>
-          <input
-            type="text"
+          <textarea
+            rows={Math.min(4, Math.max(1, (item.title || '').split('\n').length))}
             value={item.title}
             onChange={(e) => updateItem(item.id, 'title', e.target.value)}
-            className="bg-transparent font-display font-black text-lg sm:text-xl text-[#0F172A] focus:outline-none focus:border-b-2 focus:border-[#0F172A] w-3/4 sm:w-1/2 print:border-none print:w-auto"
-            placeholder="اسم البند (مثال: شباك المطبخ)"
+            className="bg-transparent font-display font-black text-lg sm:text-xl text-[#0F172A] focus:outline-none focus:border-b-2 focus:border-[#0F172A] w-3/4 sm:w-2/3 resize-none leading-snug print:border-none print:w-auto"
+            placeholder="اسم ووصف البند (مثال: شباك المطبخ)"
           />
         </div>
         <button 
           onClick={() => removeItem(item.id)}
-          className="text-red-500 hover:text-red-700 p-2.5 rounded-full hover:bg-red-50 transition print:hidden cursor-pointer"
+          className="text-red-500 hover:text-red-700 p-2.5 rounded-full hover:bg-red-50 transition print:hidden cursor-pointer shrink-0"
           title="حذف البند"
         >
           <Trash2 size={20} />
         </button>
       </div>
+
+      {rowAutoFit.hasOverflow && (
+        <div
+          role="alert"
+          className="bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex items-start gap-2.5 text-amber-950 text-xs font-bold print:hidden"
+        >
+          <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+          <p className="leading-relaxed">
+            <span className="font-black">تنبيه مساحة البند في الـ PDF: </span>
+            محتوى هذا البند ({rowAutoFit.overflowColumns.join('، ')}) طويل جداً ويتجاوز المساحة الثابتة المخصصة للبند حتى بعد تصغير الخط تلقائياً للحد الأدنى المقروء (7px). يُرجى اختصار النص أو مراجعته لضمان ظهوره كاملاً دون اقتطاع.
+          </p>
+        </div>
+      )}
 
       <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 lg:gap-8">
         {/* المقاسات */}

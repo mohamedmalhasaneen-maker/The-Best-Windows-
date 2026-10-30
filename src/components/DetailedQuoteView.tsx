@@ -6,11 +6,27 @@ import {
   ChevronRight,
   ChevronLeft,
   FileText,
+  CheckCircle2,
+  AlertCircle,
+  X,
 } from 'lucide-react';
-import jspdf from 'jspdf';
-import * as htmlToImage from 'html-to-image';
 import logoUrl from '../assets/images/the_best_windows_logo.jpeg';
 import { BRAND_NAME, COMPANY_LOCATIONS } from '../constants';
+import {
+  A4_WIDTH,
+  A4_HEIGHT,
+  QuotePageDescriptor,
+  PdfGenerationProgress,
+  paginateQuoteIntoA4Pages,
+  buildQuotePdfCacheKey,
+  getCachedPdf,
+  generateQuotePdfBlob,
+  triggerPdfBlobDownload,
+  preloadLogoDataUrl,
+  getCachedLogoSrc,
+  warmUpPdfAssets,
+  nextPaintFrame,
+} from '../utils/pdfExportEngine';
 
 interface Props {
   customer: CustomerInfo;
@@ -22,229 +38,10 @@ interface Props {
   onBack?: () => void;
 }
 
-// Canonical A4 Portrait dimensions at 96 DPI (210mm × 297mm -> exact 1 : 1.4142857 ratio)
-const A4_WIDTH = 794;
-const A4_HEIGHT = 1123;
+// Kick off logo Base64 preload immediately on module import so it is ready before first export
+void preloadLogoDataUrl(logoUrl);
 
-interface IndexedQuoteItem {
-  item: CalculatedItem;
-  serialNumber: number;
-}
-
-interface QuotePageDescriptor {
-  pageNumber: number;
-  isFirstPage: boolean;
-  items: IndexedQuoteItem[];
-  hasMoreItemsAfter: boolean;
-  showTotals: boolean;
-  showNotes: boolean;
-  showTermsAndSignatures: boolean;
-  // Per-page totals (Almekawy Style)
-  pageItemCount: number;
-  pageItemRange: string;
-  pageTotalArea: number;
-  pageTotalPrice: number;
-}
-
-function estimateItemRowHeight(
-  item: CalculatedItem,
-  profiles: Record<string, Profile>,
-  addons: Record<string, Addon>
-): number {
-  const threshold = 1.0;
-  const isMinArea = (item.width * item.height) / 10000 < threshold;
-
-  // Complexity check for font shrinking
-  const addonCount = item.addons.length;
-  const title = item.title || '';
-  const titleLines = Math.max(1, Math.ceil(title.length / 26) + (title.split('\n').length - 1));
-  const isComplex = addonCount > 3 || titleLines > 2;
-  
-  // Font sizes: complex ? 13px : 15px (approx line heights)
-  const lineH = isComplex ? 13 : 15;
-  const spacing = isComplex ? 6 : 8;
-
-  // Column 2 (بيان البند)
-  const descHeight = Math.max(44, titleLines * lineH + (isComplex ? 16 : 20));
-
-  // Column 6 (تفاصيل القطاع)
-  const profileName = profiles[item.profile]?.name || item.profile || '';
-  const pLines = Math.max(1, Math.ceil(profileName.length / 20) + (profileName.split('\n').length - 1));
-  const detailLines = pLines + 1 + (item.innerType !== 'panel' ? 1 : 0) + (item.opening === 'مفصلي' ? 1 : 0);
-  const detailsHeight = detailLines * (lineH - 1) + spacing;
-
-  // Column 7 (الإضافات)
-  const addonsHeight = Math.max(1, addonCount) * (lineH - 2) + spacing;
-
-  // Column 8 (الإجمالي)
-  const priceLines = 2 + (item.quantity && item.quantity > 1 ? 1 : 0) + (item.flatAddonsPrice ? 1 : 0);
-  const priceHeight = priceLines * lineH + spacing;
-
-  // Column 4 (المساحة)
-  const areaHeight = 2 * 13 + (isMinArea ? 13 : 0) + spacing;
-
-  // Max height of all columns + vertical padding + borders
-  return Math.max(descHeight, detailsHeight, addonsHeight, priceHeight, areaHeight) + 8;
-}
-
-function estimateNotesHeight(customer: CustomerInfo): number {
-  const mainNote = (customer.notes || '').trim();
-  const extraNotes = (customer.additionalNotes || []).filter((n) => n.text && n.text.trim().length > 0);
-  if (!mainNote && extraNotes.length === 0) return 0;
-
-  let height = 55; // Header + padding
-  if (mainNote) {
-    const lines = Math.max(1, Math.ceil(mainNote.length / 90) + (mainNote.split('\n').length - 1));
-    height += lines * 20 + (customer.notesAmount ? 32 : 12);
-  }
-  for (const n of extraNotes) {
-    const text = n.text.trim();
-    const lines = Math.max(1, Math.ceil(text.length / 90) + (text.split('\n').length - 1));
-    height += lines * 20 + (n.amount ? 32 : 16);
-  }
-  return height;
-}
-
-function paginateQuoteIntoA4Pages(
-  items: CalculatedItem[],
-  customer: CustomerInfo,
-  profiles: Record<string, Profile>,
-  addons: Record<string, Addon>
-): QuotePageDescriptor[] {
-  // Budget of 1050px (A4 is 1123, leaves space for margins and footer)
-  // Slightly increased budget to reduce gaps
-  const SAFE_PAGE_BUDGET = 1050;
-  const FIRST_HEADER_HEIGHT = 195;
-  const CONT_HEADER_HEIGHT = 65;
-  const TABLE_HEADER_HEIGHT = 45;
-  const TABLE_SUMMARY_HEIGHT = 32; // Almekawy style per-page summary row
-  const INDICATOR_HEIGHT = 15;
-
-  const TOTALS_HEIGHT =
-    (customer.discountValue && customer.discountValue > 0) ||
-    (customer.notesAmount && customer.notesAmount !== 0) ||
-    (customer.additionalNotes && customer.additionalNotes.some((n) => (n.amount || 0) !== 0))
-      ? 95
-      : 80;
-  const NOTES_HEIGHT = estimateNotesHeight(customer);
-  const TERMS_AND_SIGNATURES_HEIGHT = 360;
-
-  const rawPages: Omit<QuotePageDescriptor, 'pageNumber'>[] = [];
-
-  let currentPage: Omit<QuotePageDescriptor, 'pageNumber'> = {
-    isFirstPage: true,
-    items: [],
-    hasMoreItemsAfter: false,
-    showTotals: false,
-    showNotes: false,
-    showTermsAndSignatures: false,
-    pageItemCount: 0,
-    pageItemRange: '',
-    pageTotalArea: 0,
-    pageTotalPrice: 0,
-  };
-  let usedHeight = FIRST_HEADER_HEIGHT;
-
-  const startNewPage = () => {
-    // Before finishing current page, calculate its summaries
-    if (currentPage.items.length > 0) {
-      currentPage.pageItemCount = currentPage.items.length;
-      const firstS = currentPage.items[0].serialNumber;
-      const lastS = currentPage.items[currentPage.items.length - 1].serialNumber;
-      currentPage.pageItemRange = firstS === lastS ? String(firstS) : `${firstS}-${lastS}`;
-      currentPage.pageTotalArea = currentPage.items.reduce((sum, i) => sum + i.item.area * (i.item.quantity || 1), 0);
-      currentPage.pageTotalPrice = currentPage.items.reduce((sum, i) => sum + i.item.itemTotal, 0);
-    }
-
-    rawPages.push(currentPage);
-    currentPage = {
-      isFirstPage: false,
-      items: [],
-      hasMoreItemsAfter: false,
-      showTotals: false,
-      showNotes: false,
-      showTermsAndSignatures: false,
-      pageItemCount: 0,
-      pageItemRange: '',
-      pageTotalArea: 0,
-      pageTotalPrice: 0,
-    };
-    usedHeight = CONT_HEADER_HEIGHT;
-  };
-
-  // Step 1: Greedy distribution based on actual estimated content heights
-  items.forEach((item, idx) => {
-    const rowH = estimateItemRowHeight(item, profiles, addons);
-    const isFirstOnPage = currentPage.items.length === 0;
-    const overhead = isFirstOnPage ? TABLE_HEADER_HEIGHT + TABLE_SUMMARY_HEIGHT : 0;
-    const serialNumber = idx + 1;
-
-    // Check if adding this item (plus future indicator) exceeds budget
-    if (!isFirstOnPage && usedHeight + overhead + rowH + INDICATOR_HEIGHT > SAFE_PAGE_BUDGET) {
-      currentPage.hasMoreItemsAfter = true;
-      startNewPage();
-    }
-
-    if (currentPage.items.length === 0) {
-      usedHeight += TABLE_HEADER_HEIGHT + TABLE_SUMMARY_HEIGHT;
-    }
-
-    currentPage.items.push({ item, serialNumber });
-    usedHeight += rowH;
-  });
-
-  // Step 2: Granular placement of Totals, Notes, and Terms/Signatures
-  // Instead of one big atomic block, check them individually to fill space better
-  
-  // Try to fit Totals
-  if (usedHeight + TOTALS_HEIGHT + INDICATOR_HEIGHT > SAFE_PAGE_BUDGET) {
-    currentPage.hasMoreItemsAfter = true;
-    startNewPage();
-    // Keep professional: take the last item with us if we start a new page just for totals/footer
-    if (rawPages.length > 0 && rawPages[rawPages.length - 1].items.length > 1) {
-      const lastP = rawPages[rawPages.length - 1];
-      const movedItem = lastP.items.pop()!;
-      currentPage.items.push(movedItem);
-      usedHeight += TABLE_HEADER_HEIGHT + TABLE_SUMMARY_HEIGHT + estimateItemRowHeight(movedItem.item, profiles, addons);
-    }
-  }
-  currentPage.showTotals = true;
-  usedHeight += TOTALS_HEIGHT;
-
-  // Try to fit Notes
-  if (NOTES_HEIGHT > 0) {
-    if (usedHeight + NOTES_HEIGHT + INDICATOR_HEIGHT > SAFE_PAGE_BUDGET) {
-      startNewPage();
-    }
-    currentPage.showNotes = true;
-    usedHeight += NOTES_HEIGHT;
-  }
-
-  // Try to fit Terms and Signatures
-  if (usedHeight + TERMS_AND_SIGNATURES_HEIGHT > SAFE_PAGE_BUDGET) {
-    startNewPage();
-  }
-  currentPage.showTermsAndSignatures = true;
-
-  // Final page summary calculation
-  if (currentPage.items.length > 0) {
-    currentPage.pageItemCount = currentPage.items.length;
-    const firstS = currentPage.items[0].serialNumber;
-    const lastS = currentPage.items[currentPage.items.length - 1].serialNumber;
-    currentPage.pageItemRange = firstS === lastS ? String(firstS) : `${firstS}-${lastS}`;
-    currentPage.pageTotalArea = currentPage.items.reduce((sum, i) => sum + i.item.area * (i.item.quantity || 1), 0);
-    currentPage.pageTotalPrice = currentPage.items.reduce((sum, i) => sum + i.item.itemTotal, 0);
-  }
-
-  rawPages.push(currentPage);
-
-  return rawPages.map((p, index) => ({
-    ...p,
-    pageNumber: index + 1,
-  }));
-}
-
-function MiniItemPreview({ item }: { item: CalculatedItem }) {
+const MiniItemPreview = React.memo(function MiniItemPreview({ item }: { item: CalculatedItem }) {
   const width = item.width || 100;
   const height = item.height || 100;
   const aspect = width / height;
@@ -550,7 +347,7 @@ function MiniItemPreview({ item }: { item: CalculatedItem }) {
       {renderContent()}
     </svg>
   );
-}
+});
 
 interface A4PageSheetProps {
   page: QuotePageDescriptor;
@@ -564,10 +361,14 @@ interface A4PageSheetProps {
   discountAmount: number;
   totalNotesAmount: number;
   finalPrice: number;
+  logoSrc: string;
   exportMarker?: boolean;
 }
 
-function A4PageSheet({
+const BRANCHES_FOOTER_LINE = COMPANY_LOCATIONS.map((l) => l.name).join(' · ');
+const CURRENT_YEAR = new Date().getFullYear();
+
+const A4PageSheet = React.memo(function A4PageSheet({
   page,
   totalPages,
   customer,
@@ -579,6 +380,7 @@ function A4PageSheet({
   discountAmount,
   totalNotesAmount,
   finalPrice,
+  logoSrc,
   exportMarker,
 }: A4PageSheetProps) {
   const { discountValue = 0, notesAmount = 0, notes = '', additionalNotes = [] } = customer;
@@ -601,12 +403,13 @@ function A4PageSheet({
         {page.isFirstPage ? (
           <>
             {/* Full Official Document Header (Fixed A4 Paper Geometry) */}
-            <div className="flex flex-row justify-between items-stretch gap-5 pb-4 border-b-2 border-slate-900">
+            <div className="flex flex-row justify-between items-stretch gap-5 pb-4 mb-2 border-b-2 border-slate-900">
               <div className="flex flex-col justify-between text-right flex-1 min-w-0">
                 <div className="flex items-center gap-3.5">
                   <img
-                    src={logoUrl}
+                    src={logoSrc}
                     alt={`${BRAND_NAME} - شبابيك وأبواب UPVC`}
+                    decoding="sync"
                     className="w-16 h-16 rounded-2xl border-2 border-[#0F172A] object-cover bg-white shrink-0"
                     referrerPolicy="no-referrer"
                   />
@@ -674,15 +477,15 @@ function A4PageSheet({
                 </div>
               </div>
             </div>
-
           </>
         ) : (
           /* Compact Continuation Header on Page 2+ */
           <div className="flex flex-row items-center justify-between gap-4 pb-2.5 mb-2.5 border-b-2 border-slate-900">
             <div className="flex items-center gap-2.5">
               <img
-                src={logoUrl}
+                src={logoSrc}
                 alt={`${BRAND_NAME} Logo`}
+                decoding="sync"
                 className="w-9 h-9 rounded-lg border border-[#0F172A] object-cover bg-white shrink-0"
                 referrerPolicy="no-referrer"
               />
@@ -710,47 +513,48 @@ function A4PageSheet({
           </div>
         )}
 
-        {/* Items Table (Rendered on pages that contain line items) */}
+        {/* Items Table (Fixed Row Height & Locked Column Widths with Independent Per-Item Auto-Fit Font Sizing) */}
         {page.items.length > 0 && (
           <div className="mb-2 border-[1.5px] border-slate-900 rounded-xl overflow-hidden">
-            <table className="w-full border-collapse text-right text-xs">
+            <table className="w-full table-fixed border-collapse text-right text-xs">
               <thead>
                 <tr className="bg-[#0F172A] text-white font-display border-b border-slate-900 font-black text-[11px]">
-                  <th className="py-2.5 px-2 text-center w-8 border-l border-slate-800">م</th>
-                  <th className="py-2.5 px-2.5 border-l border-slate-800">بيان البند والرسم التوضيحي</th>
-                  <th className="py-2.5 px-2 text-center border-l border-slate-800 w-[86px]">المقاسات (سم)</th>
-                  <th className="py-2.5 px-2 text-center border-l border-slate-800 w-[74px]">المساحة م²</th>
-                  <th className="py-2.5 px-1.5 text-center border-l border-slate-800 w-[42px]">العدد</th>
-                  <th className="py-2.5 px-2.5 border-l border-slate-800 w-[132px]">تفاصيل القطاع والزجاج</th>
-                  <th className="py-2.5 px-2.5 border-l border-slate-800 w-[112px]">الإضافات</th>
-                  <th className="py-2.5 px-2.5 text-left w-[108px]">إجمالي البند</th>
+                  <th className="py-2.5 px-1.5 text-center w-[32px] border-l border-slate-800">م</th>
+                  <th className="py-2.5 px-2 w-[141px] border-l border-slate-800">بيان البند والرسم التوضيحي</th>
+                  <th className="py-2.5 px-1.5 text-center border-l border-slate-800 w-[86px]">المقاسات (سم)</th>
+                  <th className="py-2.5 px-1.5 text-center border-l border-slate-800 w-[74px]">المساحة م²</th>
+                  <th className="py-2.5 px-1 text-center border-l border-slate-800 w-[42px]">العدد</th>
+                  <th className="py-2.5 px-2 border-l border-slate-800 w-[132px]">تفاصيل القطاع والزجاج</th>
+                  <th className="py-2.5 px-2 border-l border-slate-800 w-[112px]">الإضافات</th>
+                  <th className="py-2.5 px-2 text-left w-[108px]">إجمالي البند</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {page.items.map(({ item, serialNumber }) => {
+                {page.items.map(({ item, serialNumber, isMinArea, autoFit }) => {
                   const threshold = 1.0;
-                  const isMinArea = (item.width * item.height) / 10000 < threshold;
-                  
-                  // Shrink font if item has many details
-                  const title = item.title || '';
-                  const titleLines = Math.max(1, Math.ceil(title.length / 26) + (title.split('\n').length - 1));
-                  const isComplex = item.addons.length > 3 || titleLines > 2;
-                  const textClass = isComplex ? 'text-[9px]' : 'text-[10px]';
-                  const titleClass = isComplex ? 'text-[10.5px]' : 'text-[12px]';
-                  const badgeClass = isComplex ? 'text-[8.5px]' : 'text-[9.5px]';
 
                   return (
-                    <tr key={item.id} className="bg-white">
-                      <td className="py-1.5 px-1.5 text-center font-mono font-bold text-slate-400 border-l border-slate-100 tabular-nums">
-                        {String(serialNumber).padStart(2, '0')}
+                    <tr key={item.id} className="bg-white h-[72px] max-h-[72px]">
+                      <td className="py-[5px] px-1.5 text-center font-mono font-bold text-slate-400 border-l border-slate-100 tabular-nums align-middle">
+                        <div className="h-[60px] max-h-[60px] overflow-hidden flex items-center justify-center text-[11px]">
+                          {String(serialNumber).padStart(2, '0')}
+                        </div>
                       </td>
 
-                      <td className="py-1.5 px-2.5 border-l border-slate-100">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="text-right min-w-0">
-                            <div className={`font-bold text-slate-900 leading-snug ${titleClass}`}>
+                      <td className="py-[5px] px-2 border-l border-slate-100 align-middle">
+                        <div className="h-[60px] max-h-[60px] overflow-hidden flex items-center justify-between gap-1.5">
+                          <div
+                            className={`text-right min-w-0 flex-1 h-[60px] max-h-[60px] overflow-hidden flex flex-col ${
+                              autoFit.description.fitsAtMin ? 'justify-center' : 'justify-start'
+                            }`}
+                          >
+                            <div
+                              className={`font-bold text-slate-900 whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${autoFit.description.titleClass} ${autoFit.description.leadingClass}`}
+                            >
                               <span>{item.title}</span>
-                              <span className={`text-slate-400 font-semibold mr-1.5 ${isComplex ? 'text-[8.5px]' : 'text-[10px]'}`}>
+                              <span
+                                className={`text-slate-400 font-semibold mr-1 ${autoFit.description.badgeClass}`}
+                              >
                                 ·{' '}
                                 {item.itemType === 'armored_door'
                                   ? 'باب مصفح'
@@ -761,90 +565,140 @@ function A4PageSheet({
                                   : 'شباك'}
                               </span>
                             </div>
-                            <div className={`${textClass} text-slate-500 mt-0.5`}>نظام الفتح: {item.opening}</div>
+                            <div
+                              className={`text-slate-500 font-medium whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${autoFit.description.subClass} ${autoFit.description.leadingClass} ${autoFit.description.subMarginClass}`}
+                            >
+                              نظام الفتح: {item.opening}
+                            </div>
                           </div>
-                          <div className={`shrink-0 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-center p-0.5 ${isComplex ? 'w-[40px] h-[40px]' : 'w-[46px] h-[46px]'}`}>
+                          <div className="w-[44px] h-[44px] shrink-0 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-center">
                             <MiniItemPreview item={item} />
                           </div>
                         </div>
                       </td>
 
                       <td
-                        className={`py-1.5 px-1.5 text-center font-mono font-bold text-[#0F172A] border-l border-slate-100 tabular-nums ${isComplex ? 'text-[10px]' : 'text-[11px]'}`}
+                        className="py-[5px] px-1.5 text-center font-mono font-bold text-[#0F172A] border-l border-slate-100 tabular-nums align-middle"
                         dir="ltr"
                       >
-                        {item.width} × {item.height}
-                      </td>
-
-                      <td className={`py-1.5 px-1.5 text-center border-l border-slate-100 tabular-nums ${isComplex ? 'text-[10px]' : 'text-[11px]'}`}>
-                        <div className="font-bold text-[#0F172A]">{item.area.toFixed(2)} م²</div>
-                        {isMinArea && (
-                          <div className={`${badgeClass} text-amber-700 font-bold mt-0.5 whitespace-nowrap`}>
-                            (حد أدنى {threshold.toFixed(1)} م²)
-                          </div>
-                        )}
-                      </td>
-
-                      <td className={`py-1.5 px-1 text-center font-mono font-bold text-[#0F172A] border-l border-slate-100 tabular-nums ${isComplex ? 'text-[10px]' : 'text-[11px]'}`}>
-                        {item.quantity || 1}
-                      </td>
-
-                      <td className={`py-1.5 px-2 border-l border-slate-100 leading-snug ${textClass}`}>
-                        <div className={`font-bold text-slate-900 ${isComplex ? 'text-[10px]' : 'text-[11px]'}`}>
-                          {profiles[item.profile]?.name || item.profile}
+                        <div
+                          className={`h-[60px] max-h-[60px] overflow-hidden flex items-center justify-center whitespace-nowrap ${autoFit.dimensions.mainClass} ${autoFit.dimensions.leadingClass}`}
+                        >
+                          {item.width} × {item.height}
                         </div>
-                        <div className="text-slate-500 mt-0.5">
-                          {item.innerType === 'panel'
-                            ? 'بنل بالكامل'
-                            : item.innerType === 'panel_glass'
-                            ? 'بنل مع زجاج'
-                            : 'زجاج بالكامل'}
-                        </div>
-                        {item.innerType !== 'panel' && <div className="text-slate-500">زجاج: {item.glassType}</div>}
-                        {item.opening === 'مفصلي' && (
-                          <div className="text-slate-600 font-bold">ضلف: {item.hingePanes || 'ضلفة'}</div>
-                        )}
                       </td>
 
-                      <td className={`py-1.5 px-2 border-l border-slate-100 text-slate-600 leading-snug ${isComplex ? 'text-[8.5px]' : 'text-[10px]'}`}>
-                        {item.addons.length > 0 ? (
-                          <div className="flex flex-col gap-0.5">
-                            {item.addons.map((addonId) => (
-                              <span key={addonId} className="font-bold text-slate-700">
-                                • {addons[addonId]?.name || addonId}
-                              </span>
-                            ))}
+                      <td className="py-[5px] px-1.5 text-center border-l border-slate-100 tabular-nums align-middle">
+                        <div
+                          className={`h-[60px] max-h-[60px] overflow-hidden flex flex-col items-center justify-center ${autoFit.area.leadingClass}`}
+                        >
+                          <div className={`font-bold text-[#0F172A] whitespace-nowrap ${autoFit.area.mainClass}`}>
+                            {item.area.toFixed(2)} م²
                           </div>
-                        ) : (
-                          <span className="text-slate-400">بدون إضافات</span>
-                        )}
+                          {isMinArea && (
+                            <div
+                              className={`text-amber-700 font-bold mt-0.5 whitespace-nowrap ${autoFit.area.badgeClass}`}
+                            >
+                              (حد أدنى {threshold.toFixed(1)} م²)
+                            </div>
+                          )}
+                        </div>
                       </td>
 
-                      <td className="py-1.5 px-2 text-left whitespace-nowrap tabular-nums">
-                        <div className={`font-black text-[#0F172A] font-display ${isComplex ? 'text-[11.5px]' : 'text-[13px]'}`}>
-                          {formatCurrency(item.itemTotal)}
+                      <td className="py-[5px] px-1 text-center font-mono font-bold text-[#0F172A] border-l border-slate-100 tabular-nums align-middle">
+                        <div
+                          className={`h-[60px] max-h-[60px] overflow-hidden flex items-center justify-center whitespace-nowrap ${autoFit.quantity.mainClass} ${autoFit.quantity.leadingClass}`}
+                        >
+                          {item.quantity || 1}
                         </div>
-                        <div className={`${badgeClass} text-slate-500 mt-0.5`}>
-                          {item.flatProfilePrice && item.flatProfilePrice > 0
-                            ? `${formatCurrency(item.flatProfilePrice)} / ${profiles[item.profile]?.unit || 'للقطعة'}`
-                            : `${formatCurrency(item.profilePrice + item.addonsPrice)} / م²`}
+                      </td>
+
+                      <td className="py-[5px] px-2 border-l border-slate-100 align-middle">
+                        <div
+                          className={`h-[60px] max-h-[60px] overflow-hidden flex flex-col ${
+                            autoFit.details.fitsAtMin ? 'justify-center' : 'justify-start'
+                          } ${autoFit.details.gapClass} ${autoFit.details.leadingClass}`}
+                        >
+                          <div
+                            className={`font-bold text-slate-900 whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${autoFit.details.titleClass}`}
+                          >
+                            {profiles[item.profile]?.name || item.profile}
+                          </div>
+                          <div className={`text-slate-500 font-medium ${autoFit.details.subClass}`}>
+                            {item.innerType === 'panel'
+                              ? 'بنل بالكامل'
+                              : item.innerType === 'panel_glass'
+                              ? 'بنل مع زجاج'
+                              : 'زجاج بالكامل'}
+                          </div>
+                          {item.innerType !== 'panel' && (
+                            <div
+                              className={`text-slate-500 font-medium whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${autoFit.details.subClass}`}
+                            >
+                              زجاج: {item.glassType}
+                            </div>
+                          )}
+                          {item.opening === 'مفصلي' && (
+                            <div className={`text-slate-600 font-bold ${autoFit.details.subClass}`}>
+                              ضلف: {item.hingePanes || 'ضلفة'}
+                            </div>
+                          )}
                         </div>
-                        {item.quantity && item.quantity > 1 ? (
-                          <div className={`${badgeClass} text-slate-500 font-bold`}>
-                            ({formatCurrency(item.itemTotal / item.quantity)} × {item.quantity})
+                      </td>
+
+                      <td className="py-[5px] px-2 border-l border-slate-100 text-slate-600 align-middle">
+                        <div
+                          className={`h-[60px] max-h-[60px] overflow-hidden flex flex-col ${
+                            autoFit.addons.fitsAtMin ? 'justify-center' : 'justify-start'
+                          } ${autoFit.addons.leadingClass}`}
+                        >
+                          {item.addons.length > 0 ? (
+                            <div className={`flex flex-col ${autoFit.addons.gapClass}`}>
+                              {item.addons.map((addonId) => (
+                                <span
+                                  key={addonId}
+                                  className={`font-bold text-slate-700 whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${autoFit.addons.textClass}`}
+                                >
+                                  • {addons[addonId]?.name || addonId}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 text-[10px]">بدون إضافات</span>
+                          )}
+                        </div>
+                      </td>
+
+                      <td className="py-[5px] px-2 text-left whitespace-nowrap tabular-nums align-middle">
+                        <div
+                          className={`h-[60px] max-h-[60px] overflow-hidden flex flex-col ${
+                            autoFit.price.fitsAtMin ? 'justify-center' : 'justify-start'
+                          } ${autoFit.price.leadingClass}`}
+                        >
+                          <div className={`font-black text-[#0F172A] font-display ${autoFit.price.totalClass}`}>
+                            {formatCurrency(item.itemTotal)}
                           </div>
-                        ) : null}
-                        {item.flatAddonsPrice && item.flatAddonsPrice > 0 ? (
-                          <div className={`${badgeClass} text-emerald-700 font-bold`}>
-                            + {formatCurrency(item.flatAddonsPrice)} (مقطوع)
+                          <div className={`text-slate-500 mt-0.5 ${autoFit.price.subClass}`}>
+                            {item.flatProfilePrice && item.flatProfilePrice > 0
+                              ? `${formatCurrency(item.flatProfilePrice)} / ${profiles[item.profile]?.unit || 'للقطعة'}`
+                              : `${formatCurrency(item.profilePrice + item.addonsPrice)} / م²`}
                           </div>
-                        ) : null}
+                          {item.quantity && item.quantity > 1 ? (
+                            <div className={`text-slate-500 font-bold ${autoFit.price.badgeClass}`}>
+                              ({formatCurrency(item.itemTotal / item.quantity)} × {item.quantity})
+                            </div>
+                          ) : null}
+                          {item.flatAddonsPrice && item.flatAddonsPrice > 0 ? (
+                            <div className={`text-emerald-700 font-bold ${autoFit.price.badgeClass}`}>
+                              + {formatCurrency(item.flatAddonsPrice)} (مقطوع)
+                            </div>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
-              {/* Almekawy Style Per-Page Summary Row */}
               <tfoot>
                 <tr className="bg-slate-50 border-t border-slate-900 text-[10.5px] font-bold text-slate-700">
                   <td colSpan={8} className="py-2 px-6 text-left">
@@ -865,12 +719,11 @@ function A4PageSheet({
           </div>
         )}
 
-        {/* Grand Total Area and Calculations (Enhanced Almekawy Style Financial Summary) */}
+        {/* Grand Total Area and Calculations */}
         {page.showTotals && (
           <div className="bg-[#0F172A] text-white rounded-2xl border-2 border-[#F59E0B] px-6 py-4 flex flex-row justify-between items-center gap-6 shadow-md relative overflow-hidden">
-            {/* Background Decorative Accent */}
             <div className="absolute top-0 left-0 w-2 h-full bg-[#F59E0B]" />
-            
+
             <div className="text-right">
               <h4 className="font-display font-black text-lg text-[#FACC15] tracking-tight">الملخص المالي وإجمالي المسطحات</h4>
               <p className="text-slate-300 text-[10.5px] mt-1 font-bold">صافي القيمة المعتمدة لكافة الأعمال الواردة بالعرض:</p>
@@ -942,14 +795,20 @@ function A4PageSheet({
           </div>
         )}
 
-        {/* Custom Notes Section */}
+        {/* Custom Notes Section (Auto-shrinks font when exceptionally long while preventing spillover) */}
         {page.showNotes && (notes || additionalNotes.some((n) => n.text)) && (
-          <div className="mt-2 bg-slate-50 border border-slate-200 p-3 rounded-xl text-right space-y-2">
+          <div className="mt-2 bg-slate-50 border border-slate-200 p-3 rounded-xl text-right space-y-2 max-h-[960px] overflow-hidden">
             <h3 className="text-[10.5px] font-black text-[#0F172A]">ملاحظات خاصة وتفاصيل إضافية:</h3>
 
             {notes && (
               <div className="border-b border-slate-200 pb-2 last:border-none last:pb-0">
-                <p className="text-slate-700 text-xs font-bold whitespace-pre-wrap leading-relaxed">{notes}</p>
+                <p
+                  className={`text-slate-700 font-bold whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${
+                    page.notesAutoFit?.textClass || 'text-[12px]'
+                  } ${page.notesAutoFit?.leadingClass || 'leading-[1.3]'}`}
+                >
+                  {notes}
+                </p>
                 {notesAmount !== 0 && (
                   <p className="text-[11px] font-black text-amber-900 mt-1 bg-amber-50 py-1 px-2.5 rounded-md inline-block border border-amber-200 tabular-nums">
                     القيمة المقترنة: {notesAmount > 0 ? 'إضافة قدرها ' : 'خصم قدره '}
@@ -966,7 +825,13 @@ function A4PageSheet({
                     key={note.id || idx}
                     className="border-t border-dashed border-slate-200 pt-2 first:border-none first:pt-0"
                   >
-                    <p className="text-slate-700 text-xs font-bold whitespace-pre-wrap leading-relaxed">{note.text}</p>
+                    <p
+                      className={`text-slate-700 font-bold whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${
+                        page.notesAutoFit?.textClass || 'text-[12px]'
+                      } ${page.notesAutoFit?.leadingClass || 'leading-[1.3]'}`}
+                    >
+                      {note.text}
+                    </p>
                     {note.amount !== 0 && (
                       <p className="text-[11px] font-black text-amber-900 mt-1 bg-amber-50 py-1 px-2.5 rounded-md inline-block border border-amber-200 tabular-nums">
                         القيمة المقترنة: {note.amount > 0 ? 'إضافة قدرها ' : 'خصم قدره '}
@@ -1055,7 +920,7 @@ function A4PageSheet({
       <div className="pt-2.5 mt-auto border-t border-slate-200 text-right shrink-0">
         <div className="flex flex-row justify-between items-center gap-3 text-[9.5px] text-slate-500 font-bold tabular-nums">
           <p className="truncate">
-            الفروع والمعارض: {COMPANY_LOCATIONS.map((l) => l.name).join(' · ')}
+            الفروع والمعارض: {BRANCHES_FOOTER_LINE}
           </p>
           <div className="flex items-center gap-2 shrink-0 text-slate-400">
             {totalPages > 1 && (
@@ -1067,14 +932,14 @@ function A4PageSheet({
               </>
             )}
             <span className="font-extrabold">
-              © {new Date().getFullYear()} {BRAND_NAME}
+              © {CURRENT_YEAR} {BRAND_NAME}
             </span>
           </div>
         </div>
       </div>
     </div>
   );
-}
+});
 
 export default function DetailedQuoteView({
   customer,
@@ -1086,11 +951,26 @@ export default function DetailedQuoteView({
   onBack,
 }: Props) {
   const [currentPageIndex, setCurrentPageIndex] = React.useState(0);
-  const [exportState, setExportState] = React.useState<'idle' | 'downloading' | 'preparing-share' | 'ready-to-share'>('idle');
+  const [exportState, setExportState] = React.useState<
+    'idle' | 'downloading' | 'preparing-share' | 'ready-to-share'
+  >('idle');
+  const [exportProgress, setExportProgress] = React.useState<PdfGenerationProgress | null>(null);
+  const [exportFeedback, setExportFeedback] = React.useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
   const [preparedShareFile, setPreparedShareFile] = React.useState<File | null>(null);
   const [canNativeShare, setCanNativeShare] = React.useState(false);
+  const [resolvedLogoSrc, setResolvedLogoSrc] = React.useState<string>(() =>
+    getCachedLogoSrc(logoUrl)
+  );
+
+  // Synchronous re-entrancy lock to block rapid repeated clicks before React state commits
+  const isExportingLockRef = React.useRef(false);
+  const feedbackTimerRef = React.useRef<number | undefined>(undefined);
 
   const stageRef = React.useRef<HTMLDivElement>(null);
+  const previewSheetWrapperRef = React.useRef<HTMLDivElement>(null);
   const exportContainerRef = React.useRef<HTMLDivElement>(null);
 
   const computeInitialFitWidthScale = () => {
@@ -1105,12 +985,38 @@ export default function DetailedQuoteView({
 
   React.useEffect(() => {
     setCanNativeShare(typeof navigator !== 'undefined' && typeof navigator.share === 'function');
+    let mounted = true;
+    preloadLogoDataUrl(logoUrl).then((dataUrl) => {
+      if (mounted) {
+        setResolvedLogoSrc(dataUrl);
+      }
+    });
+    warmUpPdfAssets(logoUrl, previewSheetWrapperRef.current);
+
+    return () => {
+      mounted = false;
+      window.clearTimeout(feedbackTimerRef.current);
+    };
+  }, []);
+
+  const showFeedback = React.useCallback((type: 'success' | 'error', message: string) => {
+    window.clearTimeout(feedbackTimerRef.current);
+    setExportFeedback({ type, message });
+    if (type === 'success') {
+      feedbackTimerRef.current = window.setTimeout(() => {
+        setExportFeedback(null);
+      }, 5000);
+    }
   }, []);
 
   // Deterministic quote reference shared across Mobile preview, Desktop preview, Print & PDF
   const quoteNumber = React.useMemo(() => {
-    const baseDate = (customer.date || new Date().toISOString().split('T')[0]).replace(/-/g, '').slice(0, 6);
-    const seedSource = `${customer.name || ''}-${customer.phone || ''}-${calculations.itemsCalculated[0]?.id || 101}`;
+    const baseDate = (customer.date || new Date().toISOString().split('T')[0])
+      .replace(/-/g, '')
+      .slice(0, 6);
+    const seedSource = `${customer.name || ''}-${customer.phone || ''}-${
+      calculations.itemsCalculated[0]?.id || 101
+    }`;
     let hash = 0;
     for (let i = 0; i < seedSource.length; i++) {
       hash = (hash * 31 + seedSource.charCodeAt(i)) % 900;
@@ -1123,7 +1029,9 @@ export default function DetailedQuoteView({
 
   const discountAmount = React.useMemo(() => {
     const raw =
-      discountType === 'percentage' ? (calculations.totalPrice * discountValue) / 100 : discountValue;
+      discountType === 'percentage'
+        ? (calculations.totalPrice * discountValue) / 100
+        : discountValue;
     return raw > calculations.totalPrice ? calculations.totalPrice : raw;
   }, [calculations.totalPrice, discountType, discountValue]);
 
@@ -1135,17 +1043,52 @@ export default function DetailedQuoteView({
     return Math.max(0, calculations.totalPrice - discountAmount + totalNotesAmount);
   }, [calculations.totalPrice, discountAmount, totalNotesAmount]);
 
-  // Reset prepared file if anything changes
-  React.useEffect(() => {
-    setPreparedShareFile(null);
-    if (exportState === 'ready-to-share') {
-      setExportState('idle');
-    }
-  }, [customer, calculations, profiles, addons]);
-
   const pages = React.useMemo(() => {
     return paginateQuoteIntoA4Pages(calculations.itemsCalculated, customer, profiles, addons);
   }, [calculations.itemsCalculated, customer, profiles, addons]);
+
+  // Detect any items or notes that still exceed allocated cell space even at minimum readable font (7px)
+  const overflowSummary = React.useMemo(() => {
+    const itemWarnings: { serialNumber: number; columns: string[]; pageNumber: number }[] = [];
+    let hasNotesOverflow = false;
+
+    for (const p of pages) {
+      if (p.notesAutoFit?.hasOverflow) {
+        hasNotesOverflow = true;
+      }
+      for (const entry of p.items) {
+        if (entry.autoFit.hasOverflow) {
+          itemWarnings.push({
+            serialNumber: entry.serialNumber,
+            columns: entry.autoFit.overflowColumns,
+            pageNumber: p.pageNumber,
+          });
+        }
+      }
+    }
+    return { itemWarnings, hasNotesOverflow };
+  }, [pages]);
+
+  const exportFileName = React.useMemo(() => {
+    const clientNameClean = (customer.name || 'عميل').trim().replace(/\s+/g, '_');
+    return `عرض_سعر_${BRAND_NAME.replace(/\s+/g, '_')}_${clientNameClean}.pdf`;
+  }, [customer.name]);
+
+  const quoteCacheKey = React.useMemo(() => {
+    return buildQuotePdfCacheKey(quoteNumber, customer, calculations, profiles, addons);
+  }, [quoteNumber, customer, calculations, profiles, addons]);
+
+  // Sync prepared share file with in-memory PDF cache whenever quote changes
+  React.useEffect(() => {
+    setExportFeedback(null);
+    const cached = getCachedPdf(quoteCacheKey);
+    if (cached && cached.blob.size > 0) {
+      setPreparedShareFile(new File([cached.blob], exportFileName, { type: 'application/pdf' }));
+    } else {
+      setPreparedShareFile(null);
+      setExportState((prev) => (prev === 'ready-to-share' ? 'idle' : prev));
+    }
+  }, [quoteCacheKey, exportFileName]);
 
   // Keep current page index valid whenever item count changes
   React.useEffect(() => {
@@ -1162,7 +1105,6 @@ export default function DetailedQuoteView({
     const styles = window.getComputedStyle(stageEl);
     const padX = (parseFloat(styles.paddingLeft) || 0) + (parseFloat(styles.paddingRight) || 0);
 
-    // Subtract 2px subpixel buffer so scaled sheet strictly fits without 1px rounding overflow
     const availW = Math.max(120, stageEl.clientWidth - padX - 2);
     const nextFitWidth = Math.floor(Math.min(availW / A4_WIDTH, 1.2) * 10000) / 10000;
 
@@ -1224,67 +1166,56 @@ export default function DetailedQuoteView({
   const scaledHeight = Math.ceil(A4_HEIGHT * activeScale);
   const activePage = pages[currentPageIndex] || pages[0];
 
-  const buildPdfDocument = async (pixelRatio: number): Promise<{ pdf: jspdf; fileName: string }> => {
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-    );
-    if (typeof document !== 'undefined' && 'fonts' in document) {
-      try {
-        await (document as Document & { fonts: FontFaceSet }).fonts.ready;
-      } catch {
-        // Proceed even if font readiness promise rejects
+  const handleDownloadPdf = async () => {
+    if (isExportingLockRef.current || exportState === 'downloading' || exportState === 'preparing-share') {
+      return;
+    }
+
+    isExportingLockRef.current = true;
+    setExportFeedback(null);
+
+    try {
+      // Instant 0ms fast-path if an identical quote PDF was already generated
+      const cached = getCachedPdf(quoteCacheKey);
+      if (cached && cached.blob.size > 0) {
+        triggerPdfBlobDownload(cached.blob, exportFileName);
+        if (!preparedShareFile) {
+          setPreparedShareFile(new File([cached.blob], exportFileName, { type: 'application/pdf' }));
+        }
+        showFeedback('success', 'تم تجهيز وتنزيل ملف عرض السعر PDF بنجاح');
+        return;
       }
-    }
 
-    const container = exportContainerRef.current;
-    if (!container) {
-      throw new Error('Export container unavailable');
-    }
+      setExportState('downloading');
+      setExportProgress({ completedPages: 0, totalPages: pages.length });
 
-    const pageNodes = Array.from(container.querySelectorAll('[data-export-page]')) as HTMLElement[];
-    if (pageNodes.length === 0) {
-      throw new Error('No pages found to export');
-    }
+      // Allow loading spinner & offscreen unscaled A4 sheets to paint immediately without UI freeze
+      await nextPaintFrame();
 
-    const pdf = new jspdf({
-      orientation: 'portrait',
-      unit: 'mm',
-      format: 'a4',
-      compress: true,
-    });
+      const container = exportContainerRef.current;
+      if (!container) {
+        throw new Error('تعذر الوصول إلى حاوية صفحات التصدير');
+      }
 
-    for (let i = 0; i < pageNodes.length; i++) {
-      const node = pageNodes[i];
-      const imgData = await htmlToImage.toPng(node, {
-        quality: 0.98,
-        backgroundColor: '#ffffff',
-        pixelRatio,
-        width: A4_WIDTH,
-        height: A4_HEIGHT,
-        canvasWidth: Math.round(A4_WIDTH * pixelRatio),
-        canvasHeight: Math.round(A4_HEIGHT * pixelRatio),
+      const generated = await generateQuotePdfBlob({
+        container,
+        cacheKey: quoteCacheKey,
+        fileName: exportFileName,
+        logoSrc: resolvedLogoSrc,
+        onProgress: setExportProgress,
       });
 
-      if (i > 0) {
-        pdf.addPage('a4', 'portrait');
-      }
-      pdf.addImage(imgData, 'PNG', 0, 0, 210, 297, undefined, 'FAST');
-    }
+      // Pre-populate share file from the freshly generated Blob so sharing requires zero extra wait
+      setPreparedShareFile(new File([generated.blob], exportFileName, { type: 'application/pdf' }));
 
-    const clientNameClean = (customer.name || 'عميل').trim().replace(/\s+/g, '_');
-    const fileName = `عرض_سعر_${BRAND_NAME.replace(/\s+/g, '_')}_${clientNameClean}.pdf`;
-    return { pdf, fileName };
-  };
-
-  const handleDownloadPdf = async () => {
-    if (exportState !== 'idle') return;
-    setExportState('downloading');
-    try {
-      const { pdf, fileName } = await buildPdfDocument(2.4);
-      pdf.save(fileName);
+      triggerPdfBlobDownload(generated.blob, exportFileName);
+      showFeedback('success', 'تم تجهيز وتنزيل ملف عرض السعر PDF بنجاح');
     } catch (err) {
       console.error('Error generating PDF:', err);
+      showFeedback('error', 'تعذّر تجهيز ملف عرض السعر PDF حالياً. يرجى المحاولة مرة أخرى.');
     } finally {
+      isExportingLockRef.current = false;
+      setExportProgress(null);
       setExportState('idle');
     }
   };
@@ -1292,9 +1223,8 @@ export default function DetailedQuoteView({
   const handleSharePdf = async () => {
     if (typeof navigator === 'undefined' || !navigator.share) return;
 
-    // Phase 2: Actual synchronous share call
-    // Must be at the very top of the async function to maintain gesture context
-    if (exportState === 'ready-to-share' && preparedShareFile) {
+    // Immediate share when file is already prepared or cached (preserves synchronous user gesture)
+    if (preparedShareFile) {
       try {
         const shareData: ShareData = {
           title: `عرض سعر - ${BRAND_NAME}`,
@@ -1313,31 +1243,57 @@ export default function DetailedQuoteView({
             url: window.location.href,
           });
         }
+        if (exportState === 'ready-to-share') {
+          setExportState('idle');
+        }
       } catch (err: unknown) {
         const isAbort = err instanceof Error && err.name === 'AbortError';
         if (!isAbort) {
           console.error('Error sharing quote:', err);
+          showFeedback('error', 'تعذّرت مشاركة ملف عرض السعر. يمكنك تنزيل ملف PDF مباشرة.');
         }
       }
       return;
     }
 
-    // Phase 1: Preparation (Async)
-    if (exportState !== 'idle') return;
+    // Phase 1: Async preparation when file isn't cached yet
+    if (isExportingLockRef.current || exportState !== 'idle') return;
+    isExportingLockRef.current = true;
+    setExportFeedback(null);
     setExportState('preparing-share');
+    setExportProgress({ completedPages: 0, totalPages: pages.length });
+
     try {
-      // Small delay to ensure UI update
-      await new Promise(r => setTimeout(r, 100));
-      const { pdf, fileName } = await buildPdfDocument(2);
-      const blob = pdf.output('blob');
-      const file = new File([blob], fileName, { type: 'application/pdf' });
+      await nextPaintFrame();
+
+      const container = exportContainerRef.current;
+      if (!container) {
+        throw new Error('تعذر الوصول إلى حاوية صفحات التصدير');
+      }
+
+      const generated = await generateQuotePdfBlob({
+        container,
+        cacheKey: quoteCacheKey,
+        fileName: exportFileName,
+        logoSrc: resolvedLogoSrc,
+        onProgress: setExportProgress,
+      });
+
+      const file = new File([generated.blob], exportFileName, { type: 'application/pdf' });
       setPreparedShareFile(file);
       setExportState('ready-to-share');
     } catch (err) {
       console.error('Error preparing PDF for sharing:', err);
       setExportState('idle');
+      showFeedback('error', 'تعذّر تجهيز ملف PDF للمشاركة. يرجى المحاولة مرة أخرى.');
+    } finally {
+      isExportingLockRef.current = false;
+      setExportProgress(null);
     }
   };
+
+  const isRenderingOffscreenPages =
+    exportState === 'downloading' || exportState === 'preparing-share';
 
   return (
     <>
@@ -1365,6 +1321,7 @@ export default function DetailedQuoteView({
 
           {onBack && (
             <button
+              type="button"
               onClick={onBack}
               className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl text-xs font-black flex items-center gap-2 transition-colors cursor-pointer"
             >
@@ -1373,6 +1330,82 @@ export default function DetailedQuoteView({
             </button>
           )}
         </header>
+
+        {/* Non-Silent Overflow Warning Banner when an item or note exceeds space even at minimum 7px font */}
+        {(overflowSummary.itemWarnings.length > 0 || overflowSummary.hasNotesOverflow) && (
+          <div
+            role="alert"
+            className="px-3.5 sm:px-5 py-2.5 bg-amber-50 border-b border-amber-200 text-amber-950 text-xs font-bold flex items-start gap-2.5 text-right"
+          >
+            <AlertCircle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1 leading-relaxed">
+              <span className="font-black">تنبيه تجاوز المساحة المخصصة للبند: </span>
+              <span>
+                تم تصغير الخط تلقائياً حتى الحد الأدنى المقروء (7px)، ولكن النص لا يزال أكبر من المساحة الثابتة المخصصة في:{' '}
+              </span>
+              <span className="font-black text-amber-900">
+                {[
+                  ...overflowSummary.itemWarnings.map(
+                    (w) =>
+                      `بند ${String(w.serialNumber).padStart(2, '0')} (${w.columns.join('، ')})`
+                  ),
+                  ...(overflowSummary.hasNotesOverflow ? ['قسم الملاحظات الإضافية'] : []),
+                ].join(' · ')}
+              </span>
+              <span>. يُرجى اختصار النص أو مراجعته لضمان ظهوره بالكامل داخل حدود الجدول في ملف PDF.</span>
+            </div>
+          </div>
+        )}
+
+        {/* Clear User Status Banner during / after PDF Generation */}
+        {(exportState === 'downloading' || exportFeedback) && (
+          <div
+            role={exportFeedback?.type === 'error' ? 'alert' : 'status'}
+            aria-live="polite"
+            className={`px-3.5 sm:px-5 py-2.5 text-xs sm:text-sm font-bold flex items-center justify-between gap-3 border-b transition-colors ${
+              exportState === 'downloading'
+                ? 'bg-amber-50 text-slate-900 border-amber-200'
+                : exportFeedback?.type === 'success'
+                ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                : 'bg-rose-50 text-rose-900 border-rose-200'
+            }`}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              {exportState === 'downloading' ? (
+                <>
+                  <span className="w-4 h-4 border-2 border-[#0F172A] border-t-transparent rounded-full animate-spin shrink-0" />
+                  <span>
+                    جاري تجهيز عرض السعر PDF
+                    {exportProgress && exportProgress.totalPages > 1
+                      ? ` (${exportProgress.completedPages} / ${exportProgress.totalPages})`
+                      : '...'}
+                  </span>
+                </>
+              ) : exportFeedback?.type === 'success' ? (
+                <>
+                  <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                  <span>{exportFeedback.message}</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle size={16} className="text-rose-600 shrink-0" />
+                  <span>{exportFeedback?.message}</span>
+                </>
+              )}
+            </div>
+
+            {exportState !== 'downloading' && exportFeedback && (
+              <button
+                type="button"
+                onClick={() => setExportFeedback(null)}
+                aria-label="إغلاق الإشعار"
+                className="p-1 rounded-lg hover:bg-black/5 text-current opacity-70 hover:opacity-100 transition cursor-pointer shrink-0"
+              >
+                <X size={15} />
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Central A4 Stage — Always Fit-to-Width with Zero Horizontal Scroll */}
         <div
@@ -1389,6 +1422,7 @@ export default function DetailedQuoteView({
             }}
           >
             <div
+              ref={previewSheetWrapperRef}
               style={{
                 position: 'absolute',
                 top: 0,
@@ -1411,6 +1445,7 @@ export default function DetailedQuoteView({
                 discountAmount={discountAmount}
                 totalNotesAmount={totalNotesAmount}
                 finalPrice={finalPrice}
+                logoSrc={resolvedLogoSrc}
               />
             </div>
           </div>
@@ -1452,13 +1487,18 @@ export default function DetailedQuoteView({
             <button
               type="button"
               onClick={handleDownloadPdf}
-              disabled={exportState !== 'idle'}
-              className="min-h-[44px] flex-1 sm:flex-initial px-4 sm:px-6 rounded-xl bg-[#F59E0B] hover:bg-[#D97706] text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap"
+              disabled={exportState === 'downloading' || exportState === 'preparing-share'}
+              className="min-h-[44px] flex-1 sm:flex-initial px-4 sm:px-6 rounded-xl bg-[#F59E0B] hover:bg-[#D97706] text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer disabled:opacity-60 disabled:pointer-events-none whitespace-nowrap"
             >
               {exportState === 'downloading' ? (
                 <>
                   <span className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin shrink-0" />
-                  <span>جاري التنزيل...</span>
+                  <span>
+                    جاري تجهيز عرض السعر PDF
+                    {exportProgress && exportProgress.totalPages > 1
+                      ? ` (${exportProgress.completedPages}/${exportProgress.totalPages})`
+                      : ''}
+                  </span>
                 </>
               ) : (
                 <>
@@ -1473,7 +1513,7 @@ export default function DetailedQuoteView({
                 type="button"
                 onClick={handleSharePdf}
                 disabled={exportState === 'downloading' || exportState === 'preparing-share'}
-                className={`min-h-[44px] px-3.5 sm:px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-60 whitespace-nowrap border ${
+                className={`min-h-[44px] px-3.5 sm:px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-60 disabled:pointer-events-none whitespace-nowrap border ${
                   exportState === 'ready-to-share'
                     ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600 animate-pulse'
                     : 'bg-slate-100 hover:bg-slate-200 text-slate-900 border-slate-200'
@@ -1485,7 +1525,7 @@ export default function DetailedQuoteView({
                   <Share2 size={16} className="shrink-0" />
                 )}
                 {exportState === 'preparing-share' ? (
-                  <span>جاري التجهيز...</span>
+                  <span>جاري تجهيز عرض السعر PDF</span>
                 ) : exportState === 'ready-to-share' ? (
                   <span>اضغط للمشاركة الآن</span>
                 ) : (
@@ -1500,22 +1540,23 @@ export default function DetailedQuoteView({
         </footer>
       </section>
 
-      {/* Offscreen Unscaled 1:1 A4 Render Target for Crisp Multi-Page PDF Generation */}
-      {exportState !== 'idle' && (
+      {/* Offscreen Layout-Isolated 1:1 A4 Render Target for Fast Multi-Page PDF Capture */}
+      {isRenderingOffscreenPages && (
         <div
           ref={exportContainerRef}
           aria-hidden="true"
           style={{
             position: 'fixed',
-            top: '-24000px',
-            left: 0,
+            top: 0,
+            left: '-10000px',
             width: `${A4_WIDTH}px`,
             pointerEvents: 'none',
             zIndex: -1,
+            contain: 'layout style paint',
           }}
         >
           {pages.map((p) => (
-            <div key={p.pageNumber}>
+            <div key={p.pageNumber} style={{ contain: 'layout style paint' }}>
               <A4PageSheet
                 page={p}
                 totalPages={pages.length}
@@ -1528,6 +1569,7 @@ export default function DetailedQuoteView({
                 discountAmount={discountAmount}
                 totalNotesAmount={totalNotesAmount}
                 finalPrice={finalPrice}
+                logoSrc={resolvedLogoSrc}
                 exportMarker
               />
             </div>
@@ -1552,6 +1594,7 @@ export default function DetailedQuoteView({
                 discountAmount={discountAmount}
                 totalNotesAmount={totalNotesAmount}
                 finalPrice={finalPrice}
+                logoSrc={resolvedLogoSrc}
               />
             </div>
           ))}

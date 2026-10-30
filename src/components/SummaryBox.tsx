@@ -1,6 +1,8 @@
-import { FileText, Percent, Coins, NotebookPen, BadgePercent, Plus, Trash2 } from 'lucide-react';
+import { useMemo } from 'react';
+import { FileText, Percent, Coins, NotebookPen, BadgePercent, Plus, Trash2, AlertTriangle } from 'lucide-react';
 import { CalculationResult, CustomerInfo } from '../types';
 import { motion } from 'motion/react';
+import { computeNotesSectionAutoFit } from '../utils/itemAutoFit';
 
 interface Props {
   calculations: CalculationResult;
@@ -16,6 +18,7 @@ export default function SummaryBox({ calculations, customer, onChange, formatCur
   const notes = customer.notes || '';
   const notesAmount = customer.notesAmount || 0;
   const additionalNotes = customer.additionalNotes || [];
+  const notesAutoFit = useMemo(() => computeNotesSectionAutoFit(customer, 960), [customer]);
   
   let discountAmount = 0;
   if (discountType === 'percentage') {
@@ -111,6 +114,18 @@ export default function SummaryBox({ calculations, customer, onChange, formatCur
 
         {/* 2. ملاحظات ومبلغ من الملاحظة */}
         <div id="notes-management-section" className="space-y-4">
+          {notesAutoFit.hasOverflow && (
+            <div
+              role="alert"
+              className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5 flex items-start gap-2.5 text-amber-950 text-xs font-bold"
+            >
+              <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+              <p className="leading-relaxed">
+                <span className="font-black">تنبيه مساحة الملاحظات في الـ PDF: </span>
+                إجمالي نصوص الملاحظات يتجاوز مساحة صفحة A4 كاملة حتى بعد تصغير الخط تلقائياً للحد الأدنى المقروء (7px). يُرجى اختصار الملاحظات لضمان ظهورها بالكامل.
+              </p>
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-5 rounded-2xl border border-slate-150/80 shadow-sm">
             <div className="md:col-span-2">
               <label className="block text-xs font-extrabold text-slate-600 mb-2 uppercase tracking-wider">
