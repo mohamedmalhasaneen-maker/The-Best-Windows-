@@ -18,6 +18,8 @@ interface MobileSummaryBoxProps {
   formatCurrency: (value: number) => string;
   handlePrint: () => void;
   onSaveQuoteAuto: () => void;
+  wpcTotalPrice?: number;
+  onNavigateToWpc?: () => void;
 }
 
 export const MobileSummaryBox: React.FC<MobileSummaryBoxProps> = ({
@@ -26,12 +28,14 @@ export const MobileSummaryBox: React.FC<MobileSummaryBoxProps> = ({
   onChange,
   formatCurrency,
   handlePrint,
-  onSaveQuoteAuto
+  onSaveQuoteAuto,
+  wpcTotalPrice = 0,
+  onNavigateToWpc,
 }) => {
   const discountType = customer.discountType || 'cash';
   const discountValue = customer.discountValue || 0;
 
-  const rawTotal = calculations.totalPrice;
+  const rawTotal = calculations.totalPrice + wpcTotalPrice;
   const discountAmt = discountType === 'percentage' 
     ? rawTotal * (discountValue / 100) 
     : discountValue;
@@ -108,8 +112,20 @@ export const MobileSummaryBox: React.FC<MobileSummaryBoxProps> = ({
 
       {/* Cost Breakdown */}
       <div className="space-y-1.5 text-xs font-bold text-slate-300 pt-1 border-t border-slate-800">
+        {wpcTotalPrice > 0 && calculations.totalPrice > 0 && (
+          <>
+            <div className="flex justify-between text-slate-300">
+              <span>إجمالي شبابيك UPVC:</span>
+              <span className="font-mono">{formatCurrency(calculations.totalPrice)}</span>
+            </div>
+            <div className="flex justify-between text-amber-300">
+              <span>إجمالي أبواب WPC:</span>
+              <span className="font-mono">{formatCurrency(wpcTotalPrice)}</span>
+            </div>
+          </>
+        )}
         <div className="flex justify-between">
-          <span>الإجمالي المبدئي (قبل الخصم):</span>
+          <span>الإجمالي قبل الخصم:</span>
           <span className="font-mono">{formatCurrency(rawTotal)}</span>
         </div>
         {discountAmt > 0 && (
@@ -125,6 +141,18 @@ export const MobileSummaryBox: React.FC<MobileSummaryBoxProps> = ({
           </div>
         )}
       </div>
+
+      {/* Navigation to WPC button if available */}
+      {onNavigateToWpc && (
+        <button
+          type="button"
+          onClick={onNavigateToWpc}
+          className="w-full py-2.5 px-3 bg-[#FACC15] hover:bg-amber-400 text-[#0F172A] rounded-xl font-black text-xs flex items-center justify-center gap-2 transition active:scale-95 shadow-md cursor-pointer"
+        >
+          <span>التالي: قسم أبواب WPC (الخطوة 3)</span>
+          <span>←</span>
+        </button>
+      )}
 
       {/* Final Net Cost Display */}
       <div className="bg-[#0F172A] p-3 rounded-xl border-2 border-[#FACC15] flex items-center justify-between">

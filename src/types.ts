@@ -72,17 +72,53 @@ export interface PricingConfig {
   updatedAt: string;
 }
 
+export type WpcSizeType = '70x215' | '80x215' | '90x215' | 'custom';
+export type WpcPackageType = 9000 | 7000;
+
+export interface WpcAddons {
+  accessories?: boolean;
+  engraving?: boolean;
+  printing?: boolean;
+  customSize?: boolean;
+  claddingSingle?: boolean;
+  claddingDouble?: boolean;
+}
+
+export interface WpcDoorItem {
+  id: number;
+  title: string;
+  sizeType: WpcSizeType;
+  customWidth?: number;
+  customHeight?: number;
+  basePackage: WpcPackageType;
+  addons: WpcAddons;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+}
+
 export interface SavedQuote {
   id: string;
   name: string;
   customer: CustomerInfo;
   items: QuoteItem[];
+  wpcDoors?: WpcDoorItem[];
+  wpcTotal?: number;
   pricingSnapshot?: {
     profiles: Record<string, Profile>;
     addons: Record<string, Addon>;
   };
   date: string;
   totalPrice: number;
+}
+
+export interface SavedWpcQuote {
+  id: string;
+  name: string;
+  customer: CustomerInfo;
+  wpcDoors: WpcDoorItem[];
+  wpcTotal: number;
+  date: string;
 }
 
 export interface SavedCustomer {

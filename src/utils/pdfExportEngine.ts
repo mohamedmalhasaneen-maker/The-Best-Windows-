@@ -1,6 +1,7 @@
 import jspdf from 'jspdf';
 import * as htmlToImage from 'html-to-image';
-import { Addon, CalculatedItem, CalculationResult, CustomerInfo, Profile } from '../types';
+import { Addon, CalculatedItem, CalculationResult, CustomerInfo, Profile, WpcDoorItem } from '../types';
+import { calculateWpcDoorPrice, formatWpcDoorSize } from '../constants/wpcConstants';
 import {
   ITEM_ROW_FIXED_HEIGHT,
   ItemRowAutoFit,
@@ -22,10 +23,19 @@ export interface IndexedQuoteItem {
   autoFit: ItemRowAutoFit;
 }
 
+export interface IndexedWpcDoorItem {
+  door: WpcDoorItem;
+  serialNumber: number;
+  formattedSize: string;
+  activeAddonsList: { key: string; name: string; price: number }[];
+  estimatedHeight: number;
+}
+
 export interface QuotePageDescriptor {
   pageNumber: number;
   isFirstPage: boolean;
   items: IndexedQuoteItem[];
+  wpcDoors: IndexedWpcDoorItem[];
   hasMoreItemsAfter: boolean;
   showTotals: boolean;
   showNotes: boolean;
@@ -35,6 +45,7 @@ export interface QuotePageDescriptor {
   pageItemRange: string;
   pageTotalArea: number;
   pageTotalPrice: number;
+  pageWpcTotalPrice: number;
 }
 
 export interface CachedPdfEntry {
@@ -231,34 +242,40 @@ function finalizePageSummaries(pages: Omit<QuotePageDescriptor, 'pageNumber'>[])
       p.pageTotalPrice = 0;
     }
 
-    const laterPagesHaveItems = pages.slice(i + 1).some((nextPage) => nextPage.items.length > 0);
-    p.hasMoreItemsAfter = p.items.length > 0 && laterPagesHaveItems;
+    p.pageWpcTotalPrice = p.wpcDoors.reduce((sum, entry) => sum + entry.door.totalPrice, 0);
+
+    const laterPagesHaveItems = pages.slice(i + 1).some(
+      (nextPage) => nextPage.items.length > 0 || nextPage.wpcDoors.length > 0
+    );
+    p.hasMoreItemsAfter = (p.items.length > 0 || p.wpcDoors.length > 0) && laterPagesHaveItems;
   }
 }
 
 /**
- * Smart A4 pagination with fixed 72px item row geometry and independent per-item auto-fit font sizing.
- * Guarantees identical item positions, column widths, and font sizes across Preview, PDF, Share, and Print.
+ * Smart A4 pagination with fixed item row geometry and independent per-item auto-fit font sizing.
+ * Supports UPVC items, WPC doors, financial totals, notes, and terms across A4 pages.
  */
 export function paginateQuoteIntoA4Pages(
   items: CalculatedItem[],
   customer: CustomerInfo,
   profiles: Record<string, Profile>,
-  addons: Record<string, Addon>
+  addons: Record<string, Addon>,
+  wpcDoors: WpcDoorItem[] = []
 ): QuotePageDescriptor[] {
-  // Total A4 height is 1123px; subtracting top/bottom sheet padding (44px) and pinned footer (~32px)
-  // leaves ~1047px interior height. Using 1028px provides a clean safety cushion with zero clipping.
   const SAFE_PAGE_BUDGET = 1028;
   const FIRST_HEADER_HEIGHT = customer.deliveryDate ? 162 : 140;
   const CONT_HEADER_HEIGHT = 60;
   const TABLE_CHROME_HEIGHT = 98; // thead + tfoot + borders + bottom margin
+  const WPC_ROW_FIXED_HEIGHT = 48;
+  const WPC_TABLE_CHROME_HEIGHT = 74;
   const INDICATOR_HEIGHT = 18;
 
   const TOTALS_HEIGHT =
     (customer.discountValue && customer.discountValue > 0) ||
     (customer.notesAmount && customer.notesAmount !== 0) ||
-    (customer.additionalNotes && customer.additionalNotes.some((n) => (n.amount || 0) !== 0))
-      ? 96
+    (customer.additionalNotes && customer.additionalNotes.some((n) => (n.amount || 0) !== 0)) ||
+    (wpcDoors && wpcDoors.length > 0)
+      ? 104
       : 84;
   const MAX_NOTES_BUDGET = SAFE_PAGE_BUDGET - CONT_HEADER_HEIGHT - 8;
   const notesAutoFit = computeNotesSectionAutoFit(customer, MAX_NOTES_BUDGET);
@@ -270,6 +287,7 @@ export function paginateQuoteIntoA4Pages(
   let currentPage: Omit<QuotePageDescriptor, 'pageNumber'> = {
     isFirstPage: true,
     items: [],
+    wpcDoors: [],
     hasMoreItemsAfter: false,
     showTotals: false,
     showNotes: false,
@@ -278,6 +296,7 @@ export function paginateQuoteIntoA4Pages(
     pageItemRange: '',
     pageTotalArea: 0,
     pageTotalPrice: 0,
+    pageWpcTotalPrice: 0,
   };
   let usedHeight = FIRST_HEADER_HEIGHT;
 
@@ -286,6 +305,7 @@ export function paginateQuoteIntoA4Pages(
     currentPage = {
       isFirstPage: false,
       items: [],
+      wpcDoors: [],
       hasMoreItemsAfter: false,
       showTotals: false,
       showNotes: false,
@@ -294,18 +314,19 @@ export function paginateQuoteIntoA4Pages(
       pageItemRange: '',
       pageTotalArea: 0,
       pageTotalPrice: 0,
+      pageWpcTotalPrice: 0,
     };
     usedHeight = CONT_HEADER_HEIGHT;
   };
 
-  // Step 1: Measure each item's independent font auto-fit while keeping row height strictly fixed (72px)
+  // Step 1: UPVC Items pagination
   for (let idx = 0; idx < items.length; idx++) {
     const item = items[idx];
     const layout = analyzeQuoteItemLayout(item, profiles, addons);
     const rowH = ITEM_ROW_FIXED_HEIGHT;
     const isFirstOnPage = currentPage.items.length === 0;
     const overhead = isFirstOnPage ? TABLE_CHROME_HEIGHT : 0;
-    const hasRemainingItems = idx < items.length - 1;
+    const hasRemainingItems = idx < items.length - 1 || wpcDoors.length > 0;
     const reserveForIndicator = hasRemainingItems ? INDICATOR_HEIGHT : 0;
 
     if (!isFirstOnPage && usedHeight + overhead + rowH + reserveForIndicator > SAFE_PAGE_BUDGET) {
@@ -327,7 +348,36 @@ export function paginateQuoteIntoA4Pages(
     usedHeight += rowH;
   }
 
-  // Step 2: Granular placement of Financial Summary, Notes, and Terms/Signatures
+  // Step 2: WPC Doors pagination
+  for (let wIdx = 0; wIdx < wpcDoors.length; wIdx++) {
+    const door = wpcDoors[wIdx];
+    const pricing = calculateWpcDoorPrice(door);
+    const formattedSize = formatWpcDoorSize(door);
+    const rowH = WPC_ROW_FIXED_HEIGHT;
+    const isFirstWpcOnPage = currentPage.wpcDoors.length === 0;
+    const overhead = isFirstWpcOnPage ? WPC_TABLE_CHROME_HEIGHT : 0;
+    const hasRemaining = wIdx < wpcDoors.length - 1;
+    const reserveForIndicator = hasRemaining ? INDICATOR_HEIGHT : 0;
+
+    if (usedHeight + overhead + rowH + reserveForIndicator > SAFE_PAGE_BUDGET) {
+      startNewPage();
+    }
+
+    if (currentPage.wpcDoors.length === 0) {
+      usedHeight += WPC_TABLE_CHROME_HEIGHT;
+    }
+
+    currentPage.wpcDoors.push({
+      door,
+      serialNumber: wIdx + 1,
+      formattedSize,
+      activeAddonsList: pricing.activeAddonsList,
+      estimatedHeight: rowH,
+    });
+    usedHeight += rowH;
+  }
+
+  // Step 3: Granular placement of Financial Summary, Notes, and Terms/Signatures
   if (usedHeight + TOTALS_HEIGHT > SAFE_PAGE_BUDGET) {
     const prevPageHadMultipleItems = currentPage.items.length > 1;
     const carriedItem = prevPageHadMultipleItems ? currentPage.items.pop()! : null;
@@ -339,7 +389,6 @@ export function paginateQuoteIntoA4Pages(
         currentPage.items.push(carriedItem);
         usedHeight += carriedTableHeight;
       } else {
-        // Put item back on previous page if carrying it would overflow the new page's totals
         rawPages[rawPages.length - 1].items.push(carriedItem);
       }
     }
@@ -381,7 +430,8 @@ export function buildQuotePdfCacheKey(
   customer: CustomerInfo,
   calculations: CalculationResult,
   profiles: Record<string, Profile>,
-  addons: Record<string, Addon>
+  addons: Record<string, Addon>,
+  wpcDoors: WpcDoorItem[] = []
 ): string {
   const itemsKey = calculations.itemsCalculated
     .map((it) => {
@@ -414,12 +464,21 @@ export function buildQuotePdfCacheKey(
     })
     .join(';;');
 
+  const wpcKey = (wpcDoors || [])
+    .map(
+      (d) =>
+        `${d.id}:${d.title}:${d.sizeType}:${d.customWidth || 0}:${d.customHeight || 0}:${
+          d.basePackage
+        }:${d.quantity}:${d.unitPrice}:${d.totalPrice}:${JSON.stringify(d.addons)}`
+    )
+    .join(';;');
+
   const extraNotesKey = (customer.additionalNotes || [])
     .map((n) => `${n.id}:${n.text}:${n.amount}`)
     .join('||');
 
   return [
-    'v3-autofit',
+    'v4-wpc',
     quoteNumber,
     customer.name || '',
     customer.phone || '',
@@ -434,6 +493,7 @@ export function buildQuotePdfCacheKey(
     calculations.totalArea.toFixed(3),
     calculations.totalPrice,
     itemsKey,
+    wpcKey,
   ].join('###');
 }
 

@@ -9,6 +9,7 @@ import {
   Addon,
   SavedQuote,
   SavedCustomer,
+  WpcDoorItem,
 } from '../../types';
 
 import { MobileHeader } from './MobileHeader';
@@ -16,6 +17,7 @@ import { MobileBottomBar } from './MobileBottomBar';
 import { MobileItemCard } from './MobileItemCard';
 import { MobileCustomerForm } from './MobileCustomerForm';
 import { MobileSummaryBox } from './MobileSummaryBox';
+import { WpcDoorsSection } from '../WpcDoorsSection';
 import DetailedQuoteView from '../DetailedQuoteView';
 import PricingTable from '../PricingTable';
 import Features from '../Features';
@@ -27,6 +29,11 @@ interface MobileViewProps {
   calculations: CalculationResult;
   profiles: Record<string, Profile>;
   addons: Record<string, Addon>;
+  wpcDoors: WpcDoorItem[];
+  onAddWpcDoor: (door: WpcDoorItem) => void;
+  onUpdateWpcDoor: (id: number, door: Partial<WpcDoorItem>) => void;
+  onRemoveWpcDoor: (id: number) => void;
+  onDuplicateWpcDoor: (door: WpcDoorItem) => void;
   savedQuotes: SavedQuote[];
   savedCustomers: SavedCustomer[];
   theme: 'light' | 'dark';
@@ -43,8 +50,8 @@ interface MobileViewProps {
   onOpenCustomers: () => void;
   onOpenQr: () => void;
   handlePrint: () => void;
-  activeMainTab: 'input' | 'quote';
-  setActiveMainTab: (tab: 'input' | 'quote') => void;
+  activeMainTab: 'input' | 'wpc' | 'quote';
+  setActiveMainTab: (tab: 'input' | 'wpc' | 'quote') => void;
   formatCurrency: (value: number) => string;
   handleSelectCustomer: (c: SavedCustomer) => void;
   handleSaveCustomerFromForm: () => Promise<void>;
@@ -57,6 +64,11 @@ export const MobileView: React.FC<MobileViewProps> = ({
   calculations,
   profiles,
   addons,
+  wpcDoors,
+  onAddWpcDoor,
+  onUpdateWpcDoor,
+  onRemoveWpcDoor,
+  onDuplicateWpcDoor,
   savedQuotes,
   savedCustomers,
   theme,
@@ -87,10 +99,13 @@ export const MobileView: React.FC<MobileViewProps> = ({
     }, 150);
   };
 
+  const wpcTotalPrice = React.useMemo(
+    () => wpcDoors.reduce((sum, d) => sum + d.totalPrice, 0),
+    [wpcDoors]
+  );
+
   React.useEffect(() => {
-    if (activeMainTab === 'quote') {
-      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-    }
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
   }, [activeMainTab]);
 
   return (
@@ -136,7 +151,7 @@ export const MobileView: React.FC<MobileViewProps> = ({
                 <span className="bg-[#0F172A] text-[#FACC15] text-xs font-black px-2.5 py-1 rounded-xl shadow-sm">
                   {calculations.itemsCalculated.length} بنود
                 </span>
-                <span className="font-black text-sm text-[#0F172A]">بنود الشباك والأبواب</span>
+                <span className="font-black text-sm text-[#0F172A]">بنود الشباك والأبواب (UPVC)</span>
               </div>
             </div>
 
@@ -168,11 +183,29 @@ export const MobileView: React.FC<MobileViewProps> = ({
               formatCurrency={formatCurrency}
               handlePrint={handlePrint}
               onSaveQuoteAuto={handleSaveQuoteAuto}
+              wpcTotalPrice={wpcTotalPrice}
+              onNavigateToWpc={() => setActiveMainTab('wpc')}
             />
 
             {/* Features & Unified Footer */}
             <div className="pt-2">
               <Features />
+              <CompanyFooter onOpenQr={onOpenQr} compact />
+            </div>
+          </div>
+        ) : activeMainTab === 'wpc' ? (
+          <div className="space-y-4">
+            <WpcDoorsSection
+              wpcDoors={wpcDoors}
+              onAddDoor={onAddWpcDoor}
+              onUpdateDoor={onUpdateWpcDoor}
+              onRemoveDoor={onRemoveWpcDoor}
+              onDuplicateDoor={onDuplicateWpcDoor}
+              formatCurrency={formatCurrency}
+              onNavigatePrev={() => setActiveMainTab('input')}
+              onNavigateNext={() => setActiveMainTab('quote')}
+            />
+            <div className="pt-2">
               <CompanyFooter onOpenQr={onOpenQr} compact />
             </div>
           </div>
@@ -183,8 +216,9 @@ export const MobileView: React.FC<MobileViewProps> = ({
             formatCurrency={formatCurrency}
             profiles={profiles}
             addons={addons}
+            wpcDoors={wpcDoors}
             isMobileViewport
-            onBack={() => setActiveMainTab('input')}
+            onBack={() => setActiveMainTab(wpcDoors.length > 0 ? 'wpc' : 'input')}
           />
         )}
       </main>
@@ -195,6 +229,7 @@ export const MobileView: React.FC<MobileViewProps> = ({
         setActiveMainTab={setActiveMainTab}
         savedQuotesCount={savedQuotes.length}
         customersCount={savedCustomers.length}
+        wpcDoorsCount={wpcDoors.length}
         onOpenSavedQuotes={onOpenSavedQuotes}
         onOpenCustomers={onOpenCustomers}
         onAddNewItem={addNewItem}

@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { flushSync } from 'react-dom';
-import { Plus, Calculator, QrCode, FileText } from 'lucide-react';
+import { Plus, Calculator, QrCode, FileText, DoorClosed } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 import {
@@ -10,8 +10,10 @@ import {
   Profile,
   Addon,
   SavedQuote,
+  SavedWpcQuote,
   SavedCustomer,
   PricingConfig,
+  WpcDoorItem,
 } from './types';
 import { PROFILES, ADDONS, BRAND_NAME } from './constants';
 import { DevSettingsModal } from './components/DevSettingsModal';
@@ -20,6 +22,10 @@ import {
   fetchQuotesFromCloud,
   deleteQuoteFromCloud,
   subscribeToQuotes,
+  saveWpcQuoteToCloud,
+  fetchWpcQuotesFromCloud,
+  deleteWpcQuoteFromCloud,
+  subscribeToWpcQuotes,
   saveCustomerToCloud,
   fetchCustomersFromCloud,
   deleteCustomerFromCloud,
@@ -34,13 +40,16 @@ import Header from './components/Header';
 import ItemCard from './components/ItemCard';
 import CustomerForm from './components/CustomerForm';
 import DetailedQuoteView from './components/DetailedQuoteView';
+import WpcDetailedQuoteView from './components/WpcDetailedQuoteView';
 import SummaryBox from './components/SummaryBox';
 import PricingTable from './components/PricingTable';
 import Features from './components/Features';
 import QrModal from './components/QrModal';
 import SavedQuotesModal from './components/SavedQuotesModal';
+import SavedWpcQuotesModal from './components/SavedWpcQuotesModal';
 import CustomersModal from './components/CustomersModal';
 import PasswordModal from './components/PasswordModal';
+import { WpcDoorsSection } from './components/WpcDoorsSection';
 import { MobileView } from './components/mobile/MobileView';
 
 const formatCurrency = (value: number) => {
@@ -52,12 +61,30 @@ const formatCurrency = (value: number) => {
 };
 
 export default function App() {
+  const [activeSystem, setActiveSystem] = useState<'pvc' | 'wpc'>('pvc');
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const [isDevModalOpen, setIsDevModalOpen] = useState(false);
   const [isSavedQuotesModalOpen, setIsSavedQuotesModalOpen] = useState(false);
+  const [isSavedWpcQuotesModalOpen, setIsSavedWpcQuotesModalOpen] = useState(false);
   const [isCustomersModalOpen, setIsCustomersModalOpen] = useState(false);
-  const [passwordTarget, setPasswordTarget] = useState<'quotes' | 'customers' | null>(null);
+  const [passwordTarget, setPasswordTarget] = useState<'quotes' | 'wpc-quotes' | 'customers' | null>(null);
   const [activeMainTab, setActiveMainTab] = useState<'input' | 'quote'>('input');
+  const [activeWpcMainTab, setActiveWpcMainTab] = useState<'input' | 'quote'>('input');
+
+  const [wpcDoors, setWpcDoors] = useState<WpcDoorItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('almekawy_draft_wpc_doors');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('almekawy_draft_wpc_doors', JSON.stringify(wpcDoors));
+    } catch {}
+  }, [wpcDoors]);
 
   const [savedCustomers, setSavedCustomers] = useState<SavedCustomer[]>(() => {
     try {
@@ -75,6 +102,28 @@ export default function App() {
     } catch (e) {
       return [];
     }
+  });
+
+  const [savedWpcQuotes, setSavedWpcQuotes] = useState<SavedWpcQuote[]>(() => {
+    try {
+      const saved = localStorage.getItem('almekawy_saved_wpc_quotes');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  const [wpcCustomer, setWpcCustomer] = useState<CustomerInfo>({
+    name: '',
+    phone: '',
+    address: '',
+    date: new Date().toISOString().split('T')[0],
+    deliveryDate: '',
+    discountType: 'cash',
+    discountValue: 0,
+    notes: '',
+    notesAmount: 0,
+    additionalNotes: [],
   });
 
   // Authoritative shared pricing state (loaded strictly from Firestore, never from localStorage)
@@ -308,6 +357,7 @@ export default function App() {
 
   useEffect(() => {
     let unsubscribeQuotes: (() => void) | undefined;
+    let unsubscribeWpcQuotes: (() => void) | undefined;
     let unsubscribeCustomers: (() => void) | undefined;
 
     // Defer secondary quotes/customers listeners slightly so authoritative pricing completes first
@@ -321,6 +371,17 @@ export default function App() {
           } catch (e) {}
         } else {
           fetchQuotesFromAllSources();
+        }
+      });
+
+      unsubscribeWpcQuotes = subscribeToWpcQuotes((liveQuotes) => {
+        if (liveQuotes && liveQuotes.length > 0) {
+          setSavedWpcQuotes(liveQuotes);
+          try {
+            localStorage.setItem('almekawy_saved_wpc_quotes', JSON.stringify(liveQuotes));
+          } catch (e) {}
+        } else {
+          fetchWpcQuotesFromAllSources();
         }
       });
 
@@ -339,6 +400,7 @@ export default function App() {
     return () => {
       window.clearTimeout(initTimer);
       if (typeof unsubscribeQuotes === 'function') unsubscribeQuotes();
+      if (typeof unsubscribeWpcQuotes === 'function') unsubscribeWpcQuotes();
       if (typeof unsubscribeCustomers === 'function') unsubscribeCustomers();
     };
   }, []);
@@ -698,11 +760,39 @@ export default function App() {
     return { itemsCalculated, totalArea, totalPrice };
   }, [items, effectiveProfiles, effectiveAddons]);
 
+  const handleAddWpcDoor = (newDoor: WpcDoorItem) => {
+    setWpcDoors((prev) => [...prev, newDoor]);
+  };
+
+  const handleUpdateWpcDoor = (id: number, updatedFields: Partial<WpcDoorItem>) => {
+    setWpcDoors((prev) =>
+      prev.map((d) => (d.id === id ? ({ ...d, ...updatedFields } as WpcDoorItem) : d))
+    );
+  };
+
+  const handleRemoveWpcDoor = (id: number) => {
+    setWpcDoors((prev) => prev.filter((d) => d.id !== id));
+  };
+
+  const handleDuplicateWpcDoor = (door: WpcDoorItem) => {
+    const duplicate: WpcDoorItem = {
+      ...door,
+      id: Date.now(),
+      title: `${door.title} (نسخة)`,
+    };
+    setWpcDoors((prev) => [...prev, duplicate]);
+  };
+
+  const wpcTotalPrice = useMemo(() => {
+    return wpcDoors.reduce((sum, d) => sum + d.totalPrice, 0);
+  }, [wpcDoors]);
+
   const handleCustomerChange = (field: keyof CustomerInfo, value: any) => {
     setCustomer((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleSaveCurrentQuote = (name: string) => {
+    const combinedSubtotal = calculations.totalPrice + wpcTotalPrice;
     const finalPrice = (() => {
       const val = customer.discountValue || 0;
       const type = customer.discountType || 'cash';
@@ -711,8 +801,8 @@ export default function App() {
         customer.additionalNotes?.reduce((sum, n) => sum + (n.amount || 0), 0) || 0;
       const totalNotesAmount = notesAmount + additionalNotesSum;
       const discountAmt =
-        type === 'percentage' ? calculations.totalPrice * (val / 100) : val;
-      return Math.max(0, calculations.totalPrice - discountAmt + totalNotesAmount);
+        type === 'percentage' ? combinedSubtotal * (val / 100) : val;
+      return Math.max(0, combinedSubtotal - discountAmt + totalNotesAmount);
     })();
 
     const newQuote: SavedQuote = {
@@ -720,6 +810,8 @@ export default function App() {
       name: name,
       customer: customer,
       items: items,
+      wpcDoors: wpcDoors,
+      wpcTotal: wpcTotalPrice,
       pricingSnapshot: {
         profiles: JSON.parse(JSON.stringify(effectiveProfiles)),
         addons: JSON.parse(JSON.stringify(effectiveAddons)),
@@ -846,6 +938,7 @@ export default function App() {
   const handleLoadQuote = (quote: SavedQuote) => {
     setCustomer(quote.customer);
     setItems(quote.items);
+    setWpcDoors(quote.wpcDoors || []);
     if (
       quote.pricingSnapshot &&
       quote.pricingSnapshot.profiles &&
@@ -901,6 +994,91 @@ export default function App() {
     handleSaveCurrentQuote(defaultName);
   };
 
+  const handleWpcCustomerChange = (field: keyof CustomerInfo, value: any) => {
+    setWpcCustomer((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const fetchWpcQuotesFromAllSources = async () => {
+    try {
+      const cloudQuotes = await fetchWpcQuotesFromCloud();
+      if (cloudQuotes && cloudQuotes.length > 0) {
+        setSavedWpcQuotes(cloudQuotes);
+        try {
+          localStorage.setItem('almekawy_saved_wpc_quotes', JSON.stringify(cloudQuotes));
+        } catch (e) {}
+        return;
+      }
+    } catch (err) {
+      console.warn('Cloud WPC quotes fetch fallback:', err);
+    }
+  };
+
+  const handleSaveCurrentWpcQuote = (name: string) => {
+    const finalPrice = (() => {
+      const val = wpcCustomer.discountValue || 0;
+      const type = wpcCustomer.discountType || 'cash';
+      const notesAmount = wpcCustomer.notesAmount || 0;
+      const additionalNotesSum =
+        wpcCustomer.additionalNotes?.reduce((sum, n) => sum + (n.amount || 0), 0) || 0;
+      const totalNotesAmount = notesAmount + additionalNotesSum;
+      const discountAmt =
+        type === 'percentage' ? wpcTotalPrice * (val / 100) : val;
+      return Math.max(0, wpcTotalPrice - discountAmt + totalNotesAmount);
+    })();
+
+    const newWpcQuote: SavedWpcQuote = {
+      id: Date.now().toString(),
+      name: name,
+      customer: wpcCustomer,
+      wpcDoors: wpcDoors,
+      wpcTotal: finalPrice,
+      date: new Date().toLocaleDateString('ar-EG'),
+    };
+
+    const updated = [newWpcQuote, ...savedWpcQuotes.filter((q) => q.id !== newWpcQuote.id)];
+    setSavedWpcQuotes(updated);
+    try {
+      localStorage.setItem('almekawy_saved_wpc_quotes', JSON.stringify(updated));
+    } catch (e) {}
+
+    saveWpcQuoteToCloud(newWpcQuote).catch((err) => {
+      console.warn('Firestore WPC save error:', err);
+    });
+
+    if (wpcCustomer.name?.trim()) {
+      handleSaveCustomer({
+        name: wpcCustomer.name.trim(),
+        phone: (wpcCustomer.phone || '').trim(),
+        address: (wpcCustomer.address || '').trim(),
+      }).catch(() => {});
+    }
+  };
+
+  const handleLoadWpcQuote = (quote: SavedWpcQuote) => {
+    setWpcCustomer(quote.customer);
+    setWpcDoors(quote.wpcDoors || []);
+    setActiveSystem('wpc');
+  };
+
+  const handleDeleteWpcQuote = (id: string) => {
+    const updated = savedWpcQuotes.filter((q) => q.id !== id);
+    setSavedWpcQuotes(updated);
+    try {
+      localStorage.setItem('almekawy_saved_wpc_quotes', JSON.stringify(updated));
+    } catch (e) {}
+
+    deleteWpcQuoteFromCloud(id).catch((err) => {
+      console.warn('Firestore WPC delete error:', err);
+    });
+  };
+
+  const handleSaveWpcQuoteAuto = () => {
+    const defaultName = wpcCustomer.name?.trim()
+      ? `عرض سعر أبواب WPC - ${wpcCustomer.name.trim()}`
+      : `عرض سعر أبواب WPC - ${new Date().toLocaleDateString('ar-EG')}`;
+    handleSaveCurrentWpcQuote(defaultName);
+  };
+
   const handlePrint = () => {
     setActiveMainTab('quote');
     if (window.innerWidth < 768) {
@@ -915,6 +1093,37 @@ export default function App() {
     }, 100);
   };
 
+  const renderSystemSwitcherBar = () => (
+    <div className="bg-[#0F172A] text-white p-4 sm:p-5 rounded-3xl border-2 border-[#F59E0B] shadow-lg mb-8 print:hidden">
+      <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-center gap-4">
+        <div className="flex bg-slate-800 p-1.5 rounded-2xl border border-slate-700 w-full sm:w-auto shadow-inner">
+          <button
+            type="button"
+            onClick={() => setActiveSystem('pvc')}
+            className={`flex-1 sm:flex-initial px-6 py-2.5 rounded-xl font-black text-xs sm:text-sm transition cursor-pointer ${
+              activeSystem === 'pvc'
+                ? 'bg-[#F59E0B] text-slate-950 shadow-md'
+                : 'text-slate-300 hover:text-white'
+            }`}
+          >
+            نظام عروض أسعار UPVC
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSystem('wpc')}
+            className={`flex-1 sm:flex-initial px-6 py-2.5 rounded-xl font-black text-xs sm:text-sm transition cursor-pointer ${
+              activeSystem === 'wpc'
+                ? 'bg-[#F59E0B] text-slate-950 shadow-md'
+                : 'text-slate-300 hover:text-white'
+            }`}
+          >
+            نظام عروض أسعار WPC
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div
       className={`min-h-screen ${
@@ -923,183 +1132,242 @@ export default function App() {
       dir="rtl"
     >
 
-
-      {/* 1. Ground-up Mobile-Dedicated View (Mounted strictly on mobile viewports < md) */}
-      {isMobileViewport && (
-        <MobileView
-          customer={customer}
-          items={items}
-          calculations={calculations}
-          profiles={effectiveProfiles}
-          addons={effectiveAddons}
-          savedQuotes={savedQuotes}
-          savedCustomers={savedCustomers}
-          theme={theme}
-          onToggleTheme={toggleTheme}
-          handleCustomerChange={handleCustomerChange}
-          updateItem={updateItem}
-          removeItem={removeItem}
-          addNewItem={addNewItem}
-          toggleAddon={toggleAddon}
-          handleSaveQuoteAuto={handleSaveQuoteAuto}
-          handleSaveCurrentQuote={handleSaveCurrentQuote}
-          onOpenDevSettings={() => setIsDevModalOpen(true)}
-          onOpenSavedQuotes={() => setPasswordTarget('quotes')}
-          onOpenCustomers={() => setPasswordTarget('customers')}
-          onOpenQr={() => setIsQrModalOpen(true)}
-          handlePrint={handlePrint}
-          activeMainTab={activeMainTab}
-          setActiveMainTab={setActiveMainTab}
-          formatCurrency={formatCurrency}
-          handleSelectCustomer={handleSelectCustomer}
-          handleSaveCustomerFromForm={handleSaveCustomerFromForm}
-          onDuplicateItem={handleDuplicateItem}
-          isPrimaryHeading={isMobileViewport}
-        />
-      )}
-
-      {/* 2. Desktop-Dedicated View (Unchanged Desktop Layout >= md, plus Canonical Print Target) */}
-      <div className="hidden md:block print:block pb-24 md:pb-0 print:pb-0">
-        {activeMainTab === 'input' && (
+      {/* 1. WPC System Workspace */}
+      {activeSystem === 'wpc' && (
+        <div className="pb-24 md:pb-0 print:pb-0">
           <Header
             onOpenDevSettings={() => setIsDevModalOpen(true)}
             theme={theme}
             onToggleTheme={toggleTheme}
-            savedQuotesCount={savedQuotes.length}
-            onOpenSavedQuotes={() => setPasswordTarget('quotes')}
-            onSaveQuoteAuto={handleSaveQuoteAuto}
+            savedQuotesCount={savedWpcQuotes.length}
+            onOpenSavedQuotes={() => setPasswordTarget('wpc-quotes')}
+            onSaveQuoteAuto={handleSaveWpcQuoteAuto}
             customersCount={savedCustomers.length}
             onOpenCustomers={() => setPasswordTarget('customers')}
             isPrimaryHeading={!isMobileViewport}
           />
-        )}
 
-        <main className={`w-full max-w-none mx-auto ${activeMainTab === 'quote' ? 'p-0' : 'px-4 sm:px-8 py-8 md:py-12'} print:max-w-none print:p-0 print:m-0 transition-all duration-500`}>
+          <main className={`w-full max-w-none mx-auto ${activeWpcMainTab === 'quote' ? 'p-0' : 'px-4 sm:px-8 py-8 md:py-12'} print:max-w-none print:p-0 print:m-0 transition-all duration-500`}>
+            {/* System Switcher Bar */}
+            {renderSystemSwitcherBar()}
+
+            {/* WPC Navigation Tabs */}
+            <div className="flex bg-slate-200/60 p-1.5 rounded-2xl mb-8 max-w-3xl mx-auto border border-slate-200/80 print:hidden shadow-inner relative justify-between gap-1.5">
+              <button
+                onClick={() => setActiveWpcMainTab('input')}
+                className={`flex-1 py-3 px-3 sm:px-4 rounded-xl font-black text-xs sm:text-sm transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative z-10 select-none ${
+                  activeWpcMainTab === 'input'
+                    ? 'bg-[#0F172A] text-[#FACC15] shadow-md'
+                    : 'text-slate-600 hover:text-[#0F172A] hover:bg-slate-200'
+                }`}
+              >
+                <DoorClosed size={16} />
+                <span>1. تصميم وتعديل أبواب WPC ({wpcDoors.length})</span>
+              </button>
+
+              <button
+                onClick={() => setActiveWpcMainTab('quote')}
+                className={`flex-1 py-3 px-3 sm:px-4 rounded-xl font-black text-xs sm:text-sm transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative z-10 select-none ${
+                  activeWpcMainTab === 'quote'
+                    ? 'bg-[#0F172A] text-[#FACC15] shadow-md'
+                    : 'text-slate-600 hover:text-[#0F172A] hover:bg-slate-200'
+                }`}
+              >
+                <FileText size={16} />
+                <span>2. معاينة عرض سعر WPC (PDF)</span>
+              </button>
+            </div>
+
+            {activeWpcMainTab === 'input' && (
+              <div className="space-y-8 block print:hidden">
+                <CustomerForm
+                  customer={wpcCustomer}
+                  onChange={handleWpcCustomerChange}
+                  savedCustomers={savedCustomers}
+                  onOpenCustomersModal={() => setPasswordTarget('customers')}
+                  onSaveCustomerToDirectory={async () => {
+                    if (!wpcCustomer.name?.trim() || !wpcCustomer.phone?.trim()) return;
+                    await handleSaveCustomer({
+                      name: wpcCustomer.name.trim(),
+                      phone: wpcCustomer.phone.trim(),
+                      address: wpcCustomer.address?.trim() || '',
+                    });
+                  }}
+                  onSelectCustomer={(selected) => {
+                    setWpcCustomer((prev) => ({
+                      ...prev,
+                      name: selected.name,
+                      phone: selected.phone,
+                      address: selected.address || prev.address,
+                    }));
+                  }}
+                />
+
+                <WpcDoorsSection
+                  wpcDoors={wpcDoors}
+                  onAddDoor={handleAddWpcDoor}
+                  onUpdateDoor={handleUpdateWpcDoor}
+                  onRemoveDoor={handleRemoveWpcDoor}
+                  onDuplicateDoor={handleDuplicateWpcDoor}
+                  formatCurrency={formatCurrency}
+                  onNavigatePrev={() => {}}
+                  onNavigateNext={() => setActiveWpcMainTab('quote')}
+                />
+              </div>
+            )}
+
+            {activeWpcMainTab === 'quote' && (
+              <div className="block">
+                <WpcDetailedQuoteView
+                  customer={wpcCustomer}
+                  wpcDoors={wpcDoors}
+                  formatCurrency={formatCurrency}
+                  isMobileViewport={isMobileViewport}
+                  onBack={() => setActiveWpcMainTab('input')}
+                />
+              </div>
+            )}
+          </main>
+        </div>
+      )}
+
+      {/* 2. PVC System Workspace */}
+      {activeSystem === 'pvc' && (
+        <div className="pb-24 md:pb-0 print:pb-0">
           {activeMainTab === 'input' && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-white rounded-3xl border-2 border-slate-200 border-r-8 border-r-[#0F172A] p-8 mb-12 print:hidden overflow-hidden relative shadow-sm"
-            >
-              <h2 className="text-2xl font-display font-black text-[#0F172A] mb-4 flex items-center gap-3">
-                <Calculator className="text-[#0F172A]" size={26} />
-                بوابة {BRAND_NAME} للتسعير التفاعلي
-              </h2>
-              <p className="text-slate-500 leading-relaxed text-base max-w-3xl">
-                أدخل مقاسات الفتحات لديك (العرض والارتفاع بالسنتيمتر)، ثم اختر نوع القطاع والإضافات التي ترغب بها لكل بند. سيقوم النظام تلقائياً بحساب المساحات (المتر المربع) وعرض التكلفة الإجمالية بدقة وبشفافية تامة.
-              </p>
-            </motion.div>
+            <Header
+              onOpenDevSettings={() => setIsDevModalOpen(true)}
+              theme={theme}
+              onToggleTheme={toggleTheme}
+              savedQuotesCount={savedQuotes.length}
+              onOpenSavedQuotes={() => setPasswordTarget('quotes')}
+              onSaveQuoteAuto={handleSaveQuoteAuto}
+              customersCount={savedCustomers.length}
+              onOpenCustomers={() => setPasswordTarget('customers')}
+              isPrimaryHeading={!isMobileViewport}
+            />
           )}
 
-          {/* Navigation Tabs for adjacent pages view */}
-          {activeMainTab === 'input' && (
-            <div className="flex bg-slate-200/60 p-1.5 rounded-2xl mb-8 max-w-2xl mx-auto border border-slate-200/80 print:hidden shadow-inner relative justify-between gap-1.5">
+          <main className={`w-full max-w-none mx-auto ${activeMainTab === 'quote' ? 'p-0' : 'px-4 sm:px-8 py-8 md:py-12'} print:max-w-none print:p-0 print:m-0 transition-all duration-500`}>
+            {/* System Switcher Bar placed directly above the interactive pricing portal */}
+            {renderSystemSwitcherBar()}
+
+
+
+            {/* Navigation Tabs for PVC */}
+            <div className="flex bg-slate-200/60 p-1.5 rounded-2xl mb-8 max-w-3xl mx-auto border border-slate-200/80 print:hidden shadow-inner relative justify-between gap-1.5">
               <button
                 onClick={() => setActiveMainTab('input')}
-                className={`flex-1 py-3 px-3 sm:px-5 rounded-xl font-black text-sm transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative z-10 select-none ${
+                className={`flex-1 py-3 px-3 sm:px-4 rounded-xl font-black text-xs sm:text-sm transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative z-10 select-none ${
                   activeMainTab === 'input'
                     ? 'bg-[#0F172A] text-[#FACC15] shadow-md shadow-slate-900/10'
                     : 'text-slate-600 hover:text-[#0F172A] hover:bg-slate-200'
                 }`}
               >
-                <Calculator size={18} />
-                <span>بيانات العميل وحساب البنود</span>
+                <Calculator size={16} />
+                <span>1. حساب بنود PVC</span>
               </button>
+
               <button
                 onClick={() => setActiveMainTab('quote')}
-                className={`flex-1 py-3 px-3 sm:px-5 rounded-xl font-black text-sm transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative z-10 select-none ${
+                className={`flex-1 py-3 px-3 sm:px-4 rounded-xl font-black text-xs sm:text-sm transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative z-10 select-none ${
                   activeMainTab === 'quote'
                     ? 'bg-[#0F172A] text-[#FACC15] shadow-md shadow-slate-900/10'
                     : 'text-slate-600 hover:text-[#0F172A] hover:bg-slate-200'
                 }`}
               >
-                <FileText size={18} />
-                <span>عرض السعر التفصيلي (PDF)</span>
+                <FileText size={16} />
+                <span>2. معاينة عرض سعر PVC (PDF)</span>
               </button>
             </div>
-          )}
 
-          <div className={activeMainTab === 'input' ? 'block print:hidden' : 'hidden print:hidden'}>
-            {/* Official pricing table always displays the live shared Firestore catalog */}
-            <PricingTable profiles={profiles} addons={addons} />
+            <div className={activeMainTab === 'input' ? 'block print:hidden' : 'hidden print:hidden'}>
+              <PricingTable profiles={profiles} addons={addons} />
 
-            <CustomerForm
-              customer={customer}
-              onChange={handleCustomerChange}
-              savedCustomers={savedCustomers}
-              onOpenCustomersModal={() => setPasswordTarget('customers')}
-              onSaveCustomerToDirectory={handleSaveCustomerFromForm}
-              onSelectCustomer={handleSelectCustomer}
-            />
-
-            <div className="space-y-8 print:hidden">
-              <AnimatePresence mode="popLayout" initial={false}>
-                {calculations.itemsCalculated.map((item, index) => (
-                  <ItemCard
-                    key={item.id}
-                    item={item}
-                    index={index}
-                    updateItem={updateItem}
-                    removeItem={removeItem}
-                    toggleAddon={toggleAddon}
-                    formatCurrency={formatCurrency}
-                    profiles={effectiveProfiles}
-                    addons={effectiveAddons}
-                  />
-                ))}
-              </AnimatePresence>
-            </div>
-
-            <div className="mt-10 flex justify-center print:hidden">
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={addNewItem}
-                className="hidden md:flex items-center gap-3 bg-[#0F172A] hover:bg-black text-white px-10 py-5 rounded-2xl font-black text-xl shadow-lg transition-all w-full md:w-auto justify-center cursor-pointer"
-              >
-                <Plus size={28} />
-                إضافة بند جديد (شباك / باب)
-              </motion.button>
-            </div>
-
-            <SummaryBox
-              calculations={calculations}
-              customer={customer}
-              onChange={handleCustomerChange}
-              formatCurrency={formatCurrency}
-              handlePrint={handlePrint}
-            />
-          </div>
-
-          {(activeMainTab === 'quote' || isNativePrinting || isMobileViewport) && (
-            <div className={activeMainTab === 'quote' ? 'block' : 'hidden print:block'}>
-              <DetailedQuoteView
+              <CustomerForm
                 customer={customer}
+                onChange={handleCustomerChange}
+                savedCustomers={savedCustomers}
+                onOpenCustomersModal={() => setPasswordTarget('customers')}
+                onSaveCustomerToDirectory={handleSaveCustomerFromForm}
+                onSelectCustomer={handleSelectCustomer}
+              />
+
+              <div className="space-y-8 print:hidden">
+                <AnimatePresence mode="popLayout" initial={false}>
+                  {calculations.itemsCalculated.map((item, index) => (
+                    <ItemCard
+                      key={item.id}
+                      item={item}
+                      index={index}
+                      updateItem={updateItem}
+                      removeItem={removeItem}
+                      toggleAddon={toggleAddon}
+                      formatCurrency={formatCurrency}
+                      profiles={effectiveProfiles}
+                      addons={effectiveAddons}
+                    />
+                  ))}
+                </AnimatePresence>
+              </div>
+
+              <div className="mt-10 flex justify-center print:hidden">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={addNewItem}
+                  className="hidden md:flex items-center gap-3 bg-[#0F172A] hover:bg-black text-white px-10 py-5 rounded-2xl font-black text-xl shadow-lg transition-all w-full md:w-auto justify-center cursor-pointer"
+                >
+                  <Plus size={28} />
+                  إضافة بند جديد (شباك / باب)
+                </motion.button>
+              </div>
+
+              <SummaryBox
                 calculations={calculations}
+                customer={customer}
+                onChange={handleCustomerChange}
                 formatCurrency={formatCurrency}
-                profiles={effectiveProfiles}
-                addons={effectiveAddons}
-                onBack={() => setActiveMainTab('input')}
+                handlePrint={handlePrint}
+                wpcTotalPrice={0}
+                onNavigateToWpc={() => {
+                  setActiveSystem('wpc');
+                  setActiveWpcMainTab('input');
+                }}
               />
             </div>
-          )}
 
-          <div className="print:hidden">
-            <Features />
-          </div>
+            {(activeMainTab === 'quote' || isNativePrinting) && (
+              <div className={activeMainTab === 'quote' ? 'block' : 'hidden print:block'}>
+                <DetailedQuoteView
+                  customer={customer}
+                  calculations={calculations}
+                  formatCurrency={formatCurrency}
+                  profiles={effectiveProfiles}
+                  addons={effectiveAddons}
+                  wpcDoors={[]}
+                  onBack={() => setActiveMainTab('input')}
+                />
+              </div>
+            )}
 
-          <footer className="mt-12 pt-6 border-t border-slate-200 flex items-center justify-center print:hidden">
-            <button
-              type="button"
-              onClick={() => setIsQrModalOpen(true)}
-              className="min-h-[44px] px-6 py-2.5 bg-[#0F172A] hover:bg-slate-800 text-[#FACC15] border border-slate-700 rounded-2xl text-xs sm:text-sm font-black flex items-center gap-2 transition-all active:scale-95 shadow-sm cursor-pointer whitespace-nowrap"
-            >
-              <QrCode size={16} className="text-[#FACC15]" />
-              <span>رموز الاستجابة السريعة (QR)</span>
-            </button>
-          </footer>
-        </main>
-      </div>
+            <div className="print:hidden">
+              <Features />
+            </div>
+
+            <footer className="mt-12 pt-6 border-t border-slate-200 flex items-center justify-center print:hidden">
+              <button
+                type="button"
+                onClick={() => setIsQrModalOpen(true)}
+                className="min-h-[44px] px-6 py-2.5 bg-[#0F172A] hover:bg-slate-800 text-[#FACC15] border border-slate-700 rounded-2xl text-xs sm:text-sm font-black flex items-center gap-2 transition-all active:scale-95 shadow-sm cursor-pointer whitespace-nowrap"
+              >
+                <QrCode size={16} className="text-[#FACC15]" />
+                <span>رموز الاستجابة السريعة (QR)</span>
+              </button>
+            </footer>
+          </main>
+        </div>
+      )}
 
       {/* Shared Dialog Modals across Mobile and Desktop */}
       <AnimatePresence>
@@ -1138,6 +1406,22 @@ export default function App() {
       </AnimatePresence>
 
       <AnimatePresence>
+        {isSavedWpcQuotesModalOpen && (
+          <SavedWpcQuotesModal
+            isOpen={isSavedWpcQuotesModalOpen}
+            onClose={() => setIsSavedWpcQuotesModalOpen(false)}
+            savedQuotes={savedWpcQuotes}
+            onSaveCurrent={handleSaveCurrentWpcQuote}
+            onLoadQuote={handleLoadWpcQuote}
+            onDeleteQuote={handleDeleteWpcQuote}
+            currentCustomerName={wpcCustomer.name}
+            formatCurrency={formatCurrency}
+            onRefresh={fetchWpcQuotesFromAllSources}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {isCustomersModalOpen && (
           <CustomersModal
             isOpen={isCustomersModalOpen}
@@ -1162,6 +1446,9 @@ export default function App() {
               if (target === 'quotes') {
                 fetchQuotesFromAllSources();
                 setIsSavedQuotesModalOpen(true);
+              } else if (target === 'wpc-quotes') {
+                fetchWpcQuotesFromAllSources();
+                setIsSavedWpcQuotesModalOpen(true);
               } else if (target === 'customers') {
                 fetchCustomersFromAllSources();
                 setIsCustomersModalOpen(true);

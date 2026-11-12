@@ -1,5 +1,5 @@
 import React from 'react';
-import { CustomerInfo, CalculatedItem, CalculationResult, Profile, Addon } from '../types';
+import { CustomerInfo, CalculatedItem, CalculationResult, Profile, Addon, WpcDoorItem } from '../types';
 import {
   Download,
   Share2,
@@ -34,6 +34,7 @@ interface Props {
   formatCurrency: (value: number) => string;
   profiles: Record<string, Profile>;
   addons: Record<string, Addon>;
+  wpcDoors?: WpcDoorItem[];
   isMobileViewport?: boolean;
   onBack?: () => void;
 }
@@ -363,6 +364,8 @@ interface A4PageSheetProps {
   finalPrice: number;
   logoSrc: string;
   exportMarker?: boolean;
+  wpcTotalPrice?: number;
+  combinedSubtotal?: number;
 }
 
 const BRANCHES_FOOTER_LINE = COMPANY_LOCATIONS.map((l) => l.name).join(' · ');
@@ -382,6 +385,8 @@ const A4PageSheet = React.memo(function A4PageSheet({
   finalPrice,
   logoSrc,
   exportMarker,
+  wpcTotalPrice = 0,
+  combinedSubtotal = calculations.totalPrice,
 }: A4PageSheetProps) {
   const { discountValue = 0, notesAmount = 0, notes = '', additionalNotes = [] } = customer;
   const quoteDate = customer.date || new Date().toISOString().split('T')[0];
@@ -719,6 +724,89 @@ const A4PageSheet = React.memo(function A4PageSheet({
           </div>
         )}
 
+        {/* WPC Doors Section Table */}
+        {page.wpcDoors && page.wpcDoors.length > 0 && (
+          <div className="mb-2 border-[1.5px] border-slate-900 rounded-xl overflow-hidden">
+            <div className="bg-[#0F172A] text-white px-3 py-1.5 flex items-center justify-between border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-[#FACC15]" />
+                <span className="font-display font-black text-xs text-[#FACC15]">
+                  جدول تفاصيل ومواصفات أبواب WPC (المعالجة ضد المياه والرطوبة)
+                </span>
+              </div>
+              <span className="text-[10px] text-slate-300 font-bold">
+                {page.wpcDoors.length} {page.wpcDoors.length === 1 ? 'باب' : 'أبواب'}
+              </span>
+            </div>
+            <table className="w-full table-fixed border-collapse text-right text-xs">
+              <thead>
+                <tr className="bg-slate-100 text-slate-800 border-b border-slate-300 font-black text-[10px]">
+                  <th className="py-1.5 px-1 text-center w-[30px] border-l border-slate-200">م</th>
+                  <th className="py-1.5 px-2 w-[160px] border-l border-slate-200">بيان البند والوصف</th>
+                  <th className="py-1.5 px-2 text-center border-l border-slate-200 w-[110px]">المقاس المطلوب</th>
+                  <th className="py-1.5 px-2 border-l border-slate-200 w-[130px]">الباقة والتوريد</th>
+                  <th className="py-1.5 px-2 border-l border-slate-200 w-[150px]">المواصفات والإضافات</th>
+                  <th className="py-1.5 px-1 text-center border-l border-slate-200 w-[40px]">العدد</th>
+                  <th className="py-1.5 px-2 text-center border-l border-slate-200 w-[85px]">الفئة</th>
+                  <th className="py-1.5 px-2 text-left w-[89px]">الإجمالي</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 bg-white">
+                {page.wpcDoors.map(({ door, serialNumber, formattedSize, activeAddonsList }) => (
+                  <tr key={door.id} className="h-[46px] max-h-[48px] text-[10.5px]">
+                    <td className="py-1 px-1 text-center font-mono font-bold text-slate-400 border-l border-slate-100 align-middle">
+                      {String(serialNumber).padStart(2, '0')}
+                    </td>
+                    <td className="py-1 px-2 border-l border-slate-100 align-middle">
+                      <div className="font-bold text-slate-900 truncate leading-snug">{door.title}</div>
+                    </td>
+                    <td className="py-1 px-2 text-center border-l border-slate-100 font-mono font-bold text-slate-800 align-middle" dir="ltr">
+                      {formattedSize}
+                    </td>
+                    <td className="py-1 px-2 border-l border-slate-100 align-middle">
+                      <span className={`text-[9.5px] font-bold px-1.5 py-0.5 rounded ${door.basePackage === 9000 ? 'bg-amber-50 text-amber-900 border border-amber-200' : 'bg-slate-100 text-slate-700'}`}>
+                        {door.basePackage === 9000 ? 'باقة 9000 (شامل التركيب)' : 'باقة 7000 (توريد فقط)'}
+                      </span>
+                    </td>
+                    <td className="py-1 px-2 border-l border-slate-100 text-[9.5px] align-middle">
+                      {activeAddonsList.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {activeAddonsList.map((a) => (
+                            <span key={a.key} className="text-slate-700 font-bold whitespace-nowrap">
+                              • {a.name}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-slate-400">بدون إضافات</span>
+                      )}
+                    </td>
+                    <td className="py-1 px-1 text-center font-mono font-bold text-slate-800 border-l border-slate-100 align-middle">
+                      {door.quantity}
+                    </td>
+                    <td className="py-1 px-2 text-center font-mono font-bold text-slate-800 border-l border-slate-100 align-middle" dir="ltr">
+                      {formatCurrency(door.unitPrice)}
+                    </td>
+                    <td className="py-1 px-2 text-left font-mono font-black text-[#0F172A] align-middle" dir="ltr">
+                      {formatCurrency(door.totalPrice)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-slate-50 border-t border-slate-300 text-[10px] font-bold text-slate-700">
+                  <td colSpan={8} className="py-1.5 px-4 text-left">
+                    <span className="text-slate-400 ml-2">إجمالي أبواب WPC بالصفحة:</span>
+                    <span className="text-[#0F172A] font-black font-display text-[11px]" dir="ltr">
+                      {formatCurrency(page.pageWpcTotalPrice)}
+                    </span>
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+
         {/* Grand Total Area and Calculations */}
         {page.showTotals && (
           <div className="bg-[#0F172A] text-white rounded-2xl border-2 border-[#F59E0B] px-6 py-4 flex flex-row justify-between items-center gap-6 shadow-md relative overflow-hidden">
@@ -730,12 +818,33 @@ const A4PageSheet = React.memo(function A4PageSheet({
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-x-6 gap-y-2 shrink-0 tabular-nums">
-              <div className="text-right">
-                <span className="text-[10px] text-slate-400 font-black block mb-0.5 uppercase tracking-wider">إجمالي الأمتار</span>
-                <span className="text-xl font-black font-mono leading-none text-white" dir="ltr">
-                  {calculations.totalArea.toFixed(2)} m²
-                </span>
-              </div>
+              {calculations.totalArea > 0 && (
+                <div className="text-right">
+                  <span className="text-[10px] text-slate-400 font-black block mb-0.5 uppercase tracking-wider">إجمالي الأمتار</span>
+                  <span className="text-xl font-black font-mono leading-none text-white" dir="ltr">
+                    {calculations.totalArea.toFixed(2)} m²
+                  </span>
+                </div>
+              )}
+
+              {wpcTotalPrice > 0 && calculations.totalPrice > 0 && (
+                <>
+                  <div className="bg-slate-700 h-10 w-[1px]" />
+                  <div className="text-right">
+                    <span className="text-[10px] text-slate-400 font-black block mb-0.5">شبابيك UPVC</span>
+                    <span className="text-[12px] font-bold font-mono leading-none text-slate-200" dir="ltr">
+                      {formatCurrency(calculations.totalPrice)}
+                    </span>
+                  </div>
+                  <div className="bg-slate-700 h-10 w-[1px]" />
+                  <div className="text-right">
+                    <span className="text-[10px] text-[#FACC15] font-black block mb-0.5">أبواب WPC</span>
+                    <span className="text-[12px] font-bold font-mono leading-none text-[#FACC15]" dir="ltr">
+                      {formatCurrency(wpcTotalPrice)}
+                    </span>
+                  </div>
+                </>
+              )}
 
               {discountValue > 0 || totalNotesAmount !== 0 ? (
                 <>
@@ -743,7 +852,7 @@ const A4PageSheet = React.memo(function A4PageSheet({
                   <div className="text-right">
                     <span className="text-[10px] text-slate-400 font-black block mb-0.5">قبل الخصم</span>
                     <span className="text-[13px] font-bold font-mono leading-none text-slate-300 line-through decoration-red-500/50" dir="ltr">
-                      {formatCurrency(calculations.totalPrice)}
+                      {formatCurrency(combinedSubtotal)}
                     </span>
                   </div>
 
@@ -752,7 +861,7 @@ const A4PageSheet = React.memo(function A4PageSheet({
                       <div className="bg-slate-700 h-10 w-[1px]" />
                       <div className="text-right">
                         <span className="text-[10px] text-emerald-400 font-black block mb-0.5">خصم خاص</span>
-                        <span className="text-[13px] font-bold font-mono leading-none text-emerald-400">
+                        <span className="text-[13px] font-bold font-mono leading-none text-emerald-400" dir="ltr">
                           - {formatCurrency(discountAmount)}
                         </span>
                       </div>
@@ -775,7 +884,7 @@ const A4PageSheet = React.memo(function A4PageSheet({
                   <div className="bg-slate-700 h-10 w-[1px]" />
                   <div className="text-right">
                     <span className="text-[10px] text-[#F59E0B] font-black block mb-0.5 tracking-wide">صافي القيمة النهائية</span>
-                    <span className="text-3xl font-black font-display text-[#F59E0B] leading-none drop-shadow-sm">
+                    <span className="text-3xl font-black font-display text-[#F59E0B] leading-none drop-shadow-sm" dir="ltr">
                       {formatCurrency(finalPrice)}
                     </span>
                   </div>
@@ -785,8 +894,8 @@ const A4PageSheet = React.memo(function A4PageSheet({
                   <div className="bg-slate-700 h-10 w-[1px]" />
                   <div className="text-right">
                     <span className="text-[10px] text-[#F59E0B] font-black block mb-0.5 tracking-wide">صافي القيمة الكلية</span>
-                    <span className="text-3xl font-black font-display text-[#F59E0B] leading-none drop-shadow-sm">
-                      {formatCurrency(calculations.totalPrice)}
+                    <span className="text-3xl font-black font-display text-[#F59E0B] leading-none drop-shadow-sm" dir="ltr">
+                      {formatCurrency(combinedSubtotal)}
                     </span>
                   </div>
                 </>
@@ -947,6 +1056,7 @@ export default function DetailedQuoteView({
   formatCurrency,
   profiles,
   addons,
+  wpcDoors = [],
   isMobileViewport = false,
   onBack,
 }: Props) {
@@ -1015,7 +1125,7 @@ export default function DetailedQuoteView({
       .replace(/-/g, '')
       .slice(0, 6);
     const seedSource = `${customer.name || ''}-${customer.phone || ''}-${
-      calculations.itemsCalculated[0]?.id || 101
+      calculations.itemsCalculated[0]?.id || wpcDoors[0]?.id || 101
     }`;
     let hash = 0;
     for (let i = 0; i < seedSource.length; i++) {
@@ -1023,29 +1133,41 @@ export default function DetailedQuoteView({
     }
     const seq = 100 + Math.abs(hash);
     return `BTW-${baseDate}-${seq}`;
-  }, [customer.date, customer.name, customer.phone, calculations.itemsCalculated]);
+  }, [customer.date, customer.name, customer.phone, calculations.itemsCalculated, wpcDoors]);
 
   const { discountType = 'cash', discountValue = 0, notesAmount = 0, additionalNotes = [] } = customer;
+
+  const wpcTotalPrice = React.useMemo(() => {
+    return (wpcDoors || []).reduce((sum, d) => sum + d.totalPrice, 0);
+  }, [wpcDoors]);
+
+  const combinedSubtotal = calculations.totalPrice + wpcTotalPrice;
 
   const discountAmount = React.useMemo(() => {
     const raw =
       discountType === 'percentage'
-        ? (calculations.totalPrice * discountValue) / 100
+        ? (combinedSubtotal * discountValue) / 100
         : discountValue;
-    return raw > calculations.totalPrice ? calculations.totalPrice : raw;
-  }, [calculations.totalPrice, discountType, discountValue]);
+    return raw > combinedSubtotal ? combinedSubtotal : raw;
+  }, [combinedSubtotal, discountType, discountValue]);
 
   const totalNotesAmount = React.useMemo(() => {
     return notesAmount + additionalNotes.reduce((sum, item) => sum + (item.amount || 0), 0);
   }, [notesAmount, additionalNotes]);
 
   const finalPrice = React.useMemo(() => {
-    return Math.max(0, calculations.totalPrice - discountAmount + totalNotesAmount);
-  }, [calculations.totalPrice, discountAmount, totalNotesAmount]);
+    return Math.max(0, combinedSubtotal - discountAmount + totalNotesAmount);
+  }, [combinedSubtotal, discountAmount, totalNotesAmount]);
 
   const pages = React.useMemo(() => {
-    return paginateQuoteIntoA4Pages(calculations.itemsCalculated, customer, profiles, addons);
-  }, [calculations.itemsCalculated, customer, profiles, addons]);
+    return paginateQuoteIntoA4Pages(
+      calculations.itemsCalculated,
+      customer,
+      profiles,
+      addons,
+      wpcDoors || []
+    );
+  }, [calculations.itemsCalculated, customer, profiles, addons, wpcDoors]);
 
   // Detect any items or notes that still exceed allocated cell space even at minimum readable font (7px)
   const overflowSummary = React.useMemo(() => {
@@ -1075,8 +1197,15 @@ export default function DetailedQuoteView({
   }, [customer.name]);
 
   const quoteCacheKey = React.useMemo(() => {
-    return buildQuotePdfCacheKey(quoteNumber, customer, calculations, profiles, addons);
-  }, [quoteNumber, customer, calculations, profiles, addons]);
+    return buildQuotePdfCacheKey(
+      quoteNumber,
+      customer,
+      calculations,
+      profiles,
+      addons,
+      wpcDoors || []
+    );
+  }, [quoteNumber, customer, calculations, profiles, addons, wpcDoors]);
 
   // Sync prepared share file with in-memory PDF cache whenever quote changes
   React.useEffect(() => {
@@ -1446,6 +1575,8 @@ export default function DetailedQuoteView({
                 totalNotesAmount={totalNotesAmount}
                 finalPrice={finalPrice}
                 logoSrc={resolvedLogoSrc}
+                wpcTotalPrice={wpcTotalPrice}
+                combinedSubtotal={combinedSubtotal}
               />
             </div>
           </div>
@@ -1570,6 +1701,8 @@ export default function DetailedQuoteView({
                 totalNotesAmount={totalNotesAmount}
                 finalPrice={finalPrice}
                 logoSrc={resolvedLogoSrc}
+                wpcTotalPrice={wpcTotalPrice}
+                combinedSubtotal={combinedSubtotal}
                 exportMarker
               />
             </div>
@@ -1595,6 +1728,8 @@ export default function DetailedQuoteView({
                 totalNotesAmount={totalNotesAmount}
                 finalPrice={finalPrice}
                 logoSrc={resolvedLogoSrc}
+                wpcTotalPrice={wpcTotalPrice}
+                combinedSubtotal={combinedSubtotal}
               />
             </div>
           ))}

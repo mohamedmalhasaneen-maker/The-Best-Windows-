@@ -16,7 +16,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
-import { SavedQuote, CustomerInfo, SavedCustomer, Profile, Addon, PricingConfig } from './types';
+import { SavedQuote, SavedWpcQuote, CustomerInfo, SavedCustomer, Profile, Addon, PricingConfig } from './types';
 
 // Initialize Firebase App safely
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
@@ -1126,6 +1126,122 @@ export function subscribeToCustomers(onUpdate: (customers: SavedCustomer[]) => v
     );
   } catch (error) {
     console.warn('[Firestore] Customers subscribe init failed:', error);
+    return () => {};
+  }
+}
+
+export const WPC_QUOTES_COLLECTION = 'wpc_quotes';
+
+export async function saveWpcQuoteToCloud(quote: SavedWpcQuote): Promise<void> {
+  try {
+    const docRef = doc(db, WPC_QUOTES_COLLECTION, quote.id);
+    const sanitizedQuote = stripUndefinedDeep(quote);
+    await setDoc(
+      docRef,
+      {
+        ...sanitizedQuote,
+        updatedAt: new Date().toISOString(),
+        serverUpdatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    console.log(`[Firestore] Saved WPC quote ${quote.id} to cloud successfully`);
+    if (quote.customer && quote.customer.name && quote.customer.name.trim()) {
+      try {
+        await saveCustomerToCloud({
+          name: quote.customer.name.trim(),
+          phone: quote.customer.phone?.trim() || '',
+          address: quote.customer.address?.trim() || '',
+        });
+      } catch (custErr) {
+        console.warn('[Firestore] Automatic customer index warning:', custErr);
+      }
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `${WPC_QUOTES_COLLECTION}/${quote.id}`);
+  }
+}
+
+export async function fetchWpcQuotesFromCloud(): Promise<SavedWpcQuote[]> {
+  try {
+    const quotesQuery = query(
+      collection(db, WPC_QUOTES_COLLECTION),
+      orderBy('serverUpdatedAt', 'desc')
+    );
+    const snapshot = await getDocs(quotesQuery).catch(async () => {
+      return await getDocs(collection(db, WPC_QUOTES_COLLECTION));
+    });
+
+    const quotes: SavedWpcQuote[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data() as Partial<SavedWpcQuote>;
+      const customerData: CustomerInfo = {
+        ...defaultCustomer,
+        ...(data.customer || {}),
+        date: data.customer?.date || data.date || new Date().toLocaleDateString('ar-EG'),
+      };
+
+      const quoteRecord: SavedWpcQuote = {
+        id: data.id || docSnap.id,
+        name: data.name || 'عرض سعر أبواب WPC',
+        customer: customerData,
+        wpcDoors: Array.isArray(data.wpcDoors) ? data.wpcDoors : [],
+        wpcTotal: Number(data.wpcTotal) || Number((data as any).totalPrice) || 0,
+        date: data.date || new Date().toLocaleDateString('ar-EG'),
+      };
+      quotes.push(quoteRecord);
+    });
+
+    return quotes;
+  } catch (error) {
+    console.error('[Firestore] Error fetching WPC quotes from cloud:', error);
+    return [];
+  }
+}
+
+export async function deleteWpcQuoteFromCloud(quoteId: string): Promise<void> {
+  try {
+    const docRef = doc(db, WPC_QUOTES_COLLECTION, quoteId);
+    await deleteDoc(docRef);
+    console.log(`[Firestore] Deleted WPC quote ${quoteId} from cloud`);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `${WPC_QUOTES_COLLECTION}/${quoteId}`);
+  }
+}
+
+export function subscribeToWpcQuotes(onUpdate: (quotes: SavedWpcQuote[]) => void): () => void {
+  try {
+    const q = collection(db, WPC_QUOTES_COLLECTION);
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const quotes: SavedWpcQuote[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as Partial<SavedWpcQuote>;
+          const customerData: CustomerInfo = {
+            ...defaultCustomer,
+            ...(data.customer || {}),
+            date: data.customer?.date || data.date || new Date().toLocaleDateString('ar-EG'),
+          };
+
+          const quoteRecord: SavedWpcQuote = {
+            id: data.id || docSnap.id,
+            name: data.name || 'عرض سعر أبواب WPC',
+            customer: customerData,
+            wpcDoors: Array.isArray(data.wpcDoors) ? data.wpcDoors : [],
+            wpcTotal: Number(data.wpcTotal) || Number((data as any).totalPrice) || 0,
+            date: data.date || new Date().toLocaleDateString('ar-EG'),
+          };
+          quotes.push(quoteRecord);
+        });
+        onUpdate(quotes);
+      },
+      (err) => {
+        console.warn('[Firestore] WPC quotes realtime subscription issue:', err);
+      }
+    );
+  } catch (error) {
+    console.warn('[Firestore] WPC quotes subscribe init failed:', error);
     return () => {};
   }
 }

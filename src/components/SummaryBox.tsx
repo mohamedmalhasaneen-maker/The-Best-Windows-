@@ -10,32 +10,44 @@ interface Props {
   onChange: (field: keyof CustomerInfo, value: any) => void;
   formatCurrency: (value: number) => string;
   handlePrint: () => void;
+  wpcTotalPrice?: number;
+  onNavigateToWpc?: () => void;
 }
 
-export default function SummaryBox({ calculations, customer, onChange, formatCurrency, handlePrint }: Props) {
+export default function SummaryBox({
+  calculations,
+  customer,
+  onChange,
+  formatCurrency,
+  handlePrint,
+  wpcTotalPrice = 0,
+  onNavigateToWpc,
+}: Props) {
   const discountType = customer.discountType || 'cash';
   const discountValue = customer.discountValue || 0;
   const notes = customer.notes || '';
   const notesAmount = customer.notesAmount || 0;
   const additionalNotes = customer.additionalNotes || [];
   const notesAutoFit = useMemo(() => computeNotesSectionAutoFit(customer, 960), [customer]);
-  
+
+  const combinedSubtotal = calculations.totalPrice + wpcTotalPrice;
+
   let discountAmount = 0;
   if (discountType === 'percentage') {
-    discountAmount = (calculations.totalPrice * discountValue) / 100;
+    discountAmount = (combinedSubtotal * discountValue) / 100;
   } else {
     discountAmount = discountValue;
   }
-  
-  if (discountAmount > calculations.totalPrice) {
-    discountAmount = calculations.totalPrice;
+
+  if (discountAmount > combinedSubtotal) {
+    discountAmount = combinedSubtotal;
   }
-  
+
   // Calculate total notes amount (primary notes amount + additional notes amount)
   const totalNotesAmount = notesAmount + additionalNotes.reduce((sum, item) => sum + (item.amount || 0), 0);
-  
+
   // Calculate final price: Subtotal - Discount + Total Notes Amount
-  const finalPrice = Math.max(0, calculations.totalPrice - discountAmount + totalNotesAmount);
+  const finalPrice = Math.max(0, combinedSubtotal - discountAmount + totalNotesAmount);
 
   return (
     <motion.div 
@@ -255,14 +267,29 @@ export default function SummaryBox({ calculations, customer, onChange, formatCur
         <div>
           <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 mb-2 font-display">ملخص التكلفة الكلية</h3>
           <div className="bg-white p-6 rounded-2xl shadow-xl border-t-4 border-[#0F172A] space-y-3.5">
-            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
-              <span className="text-slate-500 font-bold text-sm">إجمالي الأمتار</span>
-              <span className="text-sm font-black text-[#0F172A] font-mono" dir="ltr">{calculations.totalArea.toFixed(2)} م²</span>
-            </div>
+            {calculations.totalArea > 0 && (
+              <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+                <span className="text-slate-500 font-bold text-sm">إجمالي مسطحات UPVC</span>
+                <span className="text-sm font-black text-[#0F172A] font-mono" dir="ltr">{calculations.totalArea.toFixed(2)} م²</span>
+              </div>
+            )}
+
+            {wpcTotalPrice > 0 && calculations.totalPrice > 0 && (
+              <>
+                <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+                  <span className="text-slate-500 font-bold text-sm">إجمالي شبابيك وبنود UPVC</span>
+                  <span className="text-sm font-black text-slate-700 font-mono" dir="ltr">{formatCurrency(calculations.totalPrice)}</span>
+                </div>
+                <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+                  <span className="text-slate-500 font-bold text-sm">إجمالي أبواب WPC</span>
+                  <span className="text-sm font-black text-amber-600 font-mono" dir="ltr">{formatCurrency(wpcTotalPrice)}</span>
+                </div>
+              </>
+            )}
             
             <div className="flex justify-between items-center pb-3 border-b border-slate-100">
               <span className="text-slate-500 font-bold text-sm">الإجمالي قبل الخصم</span>
-              <span className="text-sm font-black text-slate-700 font-mono" dir="ltr">{formatCurrency(calculations.totalPrice)}</span>
+              <span className="text-sm font-black text-slate-800 font-mono" dir="ltr">{formatCurrency(combinedSubtotal)}</span>
             </div>
 
             {discountValue > 0 && (
@@ -294,14 +321,27 @@ export default function SummaryBox({ calculations, customer, onChange, formatCur
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={handlePrint}
-              className="w-full min-h-[44px] py-3 px-4 bg-[#0F172A] hover:bg-slate-800 text-[#FACC15] rounded-xl font-black text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap"
-            >
-              <FileText size={17} className="shrink-0" />
-              <span>معاينة العرض (PDF)</span>
-            </button>
+            <div className="space-y-2 pt-2">
+              {onNavigateToWpc && (
+                <button
+                  type="button"
+                  onClick={onNavigateToWpc}
+                  className="w-full min-h-[46px] py-3 px-4 bg-[#FACC15] hover:bg-amber-400 text-[#0F172A] rounded-xl font-black text-sm flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer shadow-md"
+                >
+                  <span>التالي: قسم أبواب WPC (الخطوة 3)</span>
+                  <span>←</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={handlePrint}
+                className="w-full min-h-[44px] py-3 px-4 bg-[#0F172A] hover:bg-slate-800 text-white rounded-xl font-black text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                <FileText size={17} className="shrink-0 text-[#FACC15]" />
+                <span>معاينة العرض التفصيلي (PDF)</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
