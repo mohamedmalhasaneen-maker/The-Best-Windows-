@@ -581,7 +581,43 @@ export default function WpcDetailedQuoteView({
     return Math.floor(Math.min(estW / A4_WIDTH, 1.2) * 10000) / 10000;
   };
 
-  const [activeScale] = React.useState<number>(computeInitialFitWidthScale);
+  const [activeScale, setActiveScale] = React.useState<number>(computeInitialFitWidthScale);
+
+  const recomputeScale = React.useCallback(() => {
+    const stageEl = stageRef.current;
+    if (!stageEl || stageEl.clientWidth <= 0) return;
+    const styles = window.getComputedStyle(stageEl);
+    const padX = (parseFloat(styles.paddingLeft) || 0) + (parseFloat(styles.paddingRight) || 0);
+    const availW = Math.max(120, stageEl.clientWidth - padX - 2);
+    const nextFitWidth = Math.floor(Math.min(availW / A4_WIDTH, 1.2) * 10000) / 10000;
+    setActiveScale((prev) => (Math.abs(prev - nextFitWidth) < 0.001 ? prev : nextFitWidth));
+  }, []);
+
+  React.useLayoutEffect(() => {
+    recomputeScale();
+  }, [recomputeScale, wpcDoors.length]);
+
+  React.useEffect(() => {
+    let rafId = 0;
+    const scheduleMeasure = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(recomputeScale);
+    };
+    scheduleMeasure();
+
+    const resizeObserver = new ResizeObserver(scheduleMeasure);
+    if (stageRef.current) {
+      resizeObserver.observe(stageRef.current);
+    }
+    window.addEventListener('resize', scheduleMeasure);
+    window.addEventListener('orientationchange', scheduleMeasure);
+    return () => {
+      cancelAnimationFrame(rafId);
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', scheduleMeasure);
+      window.removeEventListener('orientationchange', scheduleMeasure);
+    };
+  }, [recomputeScale]);
 
   React.useEffect(() => {
     let mounted = true;
@@ -690,31 +726,32 @@ export default function WpcDetailedQuoteView({
   }, []);
 
   return (
-    <div className={`w-full ${isMobileViewport ? 'px-1 py-2' : 'max-w-5xl mx-auto px-4 py-8'} space-y-6`} id="wpc-detailed-quote-view" dir="rtl">
+    <div className={`w-full max-w-full overflow-x-hidden ${isMobileViewport ? 'px-2 py-2 space-y-3' : 'max-w-5xl mx-auto px-4 py-8 space-y-6'}`} id={isMobileViewport ? 'mobile-wpc-detailed-quote-view' : 'wpc-detailed-quote-view'} dir="rtl">
       {/* Top Bar */}
-      <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-slate-200 shadow-sm print:hidden">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-white p-3 sm:p-4 rounded-2xl border border-slate-200 shadow-sm print:hidden">
+        <div className="flex items-center gap-2 min-w-0">
           {onBack && (
             <button
               type="button"
               onClick={onBack}
-              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl font-black text-xs flex items-center gap-1.5 transition cursor-pointer"
+              className="min-h-[44px] px-3 sm:px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl font-black text-xs flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
             >
               <ChevronRight size={16} />
-              <span>العودة لإدارة أبواب WPC</span>
+              <span className="hidden sm:inline">العودة لإدارة أبواب WPC</span>
+              <span className="sm:hidden">رجوع</span>
             </button>
           )}
-          <h2 className="text-lg font-display font-black text-[#0F172A]">
+          <h2 className="text-sm sm:text-lg font-display font-black text-[#0F172A] truncate">
             معاينة عرض سعر أبواب WPC
           </h2>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={handleDownloadPdf}
             disabled={exportState === 'downloading'}
-            className="px-5 py-2.5 bg-[#F59E0B] hover:bg-[#D97706] text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 shadow transition cursor-pointer disabled:opacity-50"
+            className="min-h-[44px] px-4 sm:px-5 py-2 bg-[#F59E0B] hover:bg-[#D97706] text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 shadow transition cursor-pointer disabled:opacity-50 whitespace-nowrap"
           >
             <Download size={15} />
             <span>{exportState === 'downloading' ? 'جاري التصدير...' : 'تنزيل PDF'}</span>

@@ -101,12 +101,33 @@
         }
       },
       "required": ["proof", "verifiedAt"]
+    },
+    "ArmoredQuote": {
+      "title": "ArmoredQuote",
+      "description": "Saved customer quotation strictly for the independent Armored Doors system",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 256, "description": "Unique identifier for the armored door quote" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 500, "description": "Label of the saved armored door quote" },
+        "customer": { "type": "object", "description": "Customer info associated with the armored quote" },
+        "armoredDoors": { "type": "array", "description": "List of armored door items in the quote" },
+        "armoredTotal": { "type": "number", "description": "Calculated total price in EGP (includes transport & installation)" },
+        "date": { "type": "string", "maxLength": 100, "description": "Formatted date string" },
+        "createdAt": { "type": "string", "maxLength": 100, "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "maxLength": 100, "description": "Update ISO timestamp" },
+        "serverUpdatedAt": { "type": "string", "format": "date-time", "description": "Firestore server timestamp" }
+      },
+      "required": ["id", "name", "customer", "armoredDoors", "armoredTotal"]
     }
   },
   "firestore": {
     "/quotes/{quoteId}": {
       "schema": "Quote",
       "description": "Stored quotations for The Best Windows"
+    },
+    "/armored_quotes/{quoteId}": {
+      "schema": "ArmoredQuote",
+      "description": "Stored quotations strictly for the independent Armored Doors system"
     },
     "/customers/{customerId}": {
       "schema": "Customer",

@@ -218,27 +218,27 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
         <div className="lg:col-span-2 space-y-4">
           <h3 className="font-black text-[#0F172A] border-b-2 border-slate-100 pb-2 text-sm uppercase tracking-wider">المواصفات</h3>
           <div className="grid grid-cols-2 gap-x-3 gap-y-3 sm:gap-x-6 sm:gap-y-4">
-            <div>
+            <div className="min-w-0">
               <label className="block text-xs font-extrabold text-[#64748B] mb-1.5 uppercase tracking-wider">نوع البند</label>
-              <div className="flex gap-1 bg-slate-100 p-1 rounded-xl print:hidden">
+              <div className="flex gap-0.5 sm:gap-1 bg-slate-100 p-1 rounded-xl print:hidden">
                 <button
                   type="button"
                   onClick={() => updateItem(item.id, 'itemType', 'window')}
-                  className={`flex-1 py-1.5 px-1.5 text-center rounded-lg font-black text-[10.5px] sm:text-xs transition-all cursor-pointer ${item.itemType === 'window' ? 'bg-[#0F172A] text-white shadow-sm' : 'hover:text-[#0F172A] text-slate-500 hover:bg-slate-50'}`}
+                  className={`flex-1 min-w-0 py-1.5 px-1 sm:px-1.5 text-center rounded-lg font-black text-[10px] sm:text-xs transition-all cursor-pointer ${item.itemType === 'window' ? 'bg-[#0F172A] text-white shadow-sm' : 'hover:text-[#0F172A] text-slate-500 hover:bg-slate-50'}`}
                 >
                   شباك
                 </button>
                 <button
                   type="button"
                   onClick={() => updateItem(item.id, 'itemType', 'balcony')}
-                  className={`flex-1 py-1.5 px-1.5 text-center rounded-lg font-black text-[10.5px] sm:text-xs transition-all cursor-pointer ${item.itemType === 'balcony' ? 'bg-[#0F172A] text-white shadow-sm' : 'hover:text-[#0F172A] text-slate-500 hover:bg-slate-50'}`}
+                  className={`flex-1 min-w-0 py-1.5 px-1 sm:px-1.5 text-center rounded-lg font-black text-[10px] sm:text-xs transition-all cursor-pointer ${item.itemType === 'balcony' ? 'bg-[#0F172A] text-white shadow-sm' : 'hover:text-[#0F172A] text-slate-500 hover:bg-slate-50'}`}
                 >
                   بلكونة
                 </button>
                 <button
                   type="button"
                   onClick={() => updateItem(item.id, 'itemType', 'door')}
-                  className={`flex-1 py-1.5 px-2 text-center rounded-lg font-black text-xs transition-all cursor-pointer ${item.itemType === 'door' ? 'bg-[#0F172A] text-white shadow-sm' : 'hover:text-[#0F172A] text-slate-500 hover:bg-slate-50'}`}
+                  className={`flex-1 min-w-0 py-1.5 px-1 sm:px-2 text-center rounded-lg font-black text-[10px] sm:text-xs transition-all cursor-pointer ${item.itemType === 'door' ? 'bg-[#0F172A] text-white shadow-sm' : 'hover:text-[#0F172A] text-slate-500 hover:bg-slate-50'}`}
                 >
                   باب
                 </button>
@@ -248,7 +248,7 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
               </div>
             </div>
 
-            <div>
+            <div className="min-w-0">
               <label className="block text-xs font-extrabold text-slate-500 mb-1 uppercase tracking-wider">نوع القطاع (UPVC)</label>
               <select
                 value={item.profile}

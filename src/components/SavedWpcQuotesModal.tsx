@@ -115,18 +115,18 @@ export default function SavedWpcQuotesModal({
               <Save size={16} className="text-[#F59E0B]" />
               <span>حفظ عرض السعر الحالي لأبواب WPC</span>
             </h4>
-            <form onSubmit={handleSave} className="flex gap-2.5">
+            <form onSubmit={handleSave} className="flex flex-col sm:flex-row gap-2.5">
               <input
                 type="text"
                 value={newQuoteName}
                 onChange={(e) => setNewQuoteName(e.target.value)}
                 placeholder="أدخل اسم عرض السعر (مثال: عرض عميل مميز)..."
-                className="flex-1 px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#F59E0B]"
+                className="flex-1 min-w-0 px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#F59E0B]"
               />
               <button
                 type="submit"
                 disabled={!newQuoteName.trim() || saveSuccess}
-                className="px-5 py-2.5 bg-[#F59E0B] hover:bg-[#D97706] text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 transition disabled:opacity-50 cursor-pointer shadow-sm shrink-0"
+                className="min-h-[44px] px-5 py-2.5 bg-[#F59E0B] hover:bg-[#D97706] text-slate-950 font-black text-xs rounded-xl flex items-center justify-center gap-2 transition disabled:opacity-50 cursor-pointer shadow-sm shrink-0"
               >
                 {saveSuccess ? (
                   <>

@@ -121,6 +121,29 @@ export interface SavedWpcQuote {
   date: string;
 }
 
+export type ArmoredDoorManufactureType = 'turkish_turkish' | 'turkish_egyptian';
+
+export interface ArmoredDoorItem {
+  id: number;
+  title: string;
+  productName: string;
+  manufactureType: ArmoredDoorManufactureType;
+  manufactureLabel: string;
+  unitPrice: number;
+  quantity: number;
+  totalPrice: number;
+  notes?: string;
+}
+
+export interface SavedArmoredQuote {
+  id: string;
+  name: string;
+  customer: CustomerInfo;
+  armoredDoors: ArmoredDoorItem[];
+  armoredTotal: number;
+  date: string;
+}
+
 export interface SavedCustomer {
   id: string;
   name: string;

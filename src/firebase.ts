@@ -16,7 +16,16 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
-import { SavedQuote, SavedWpcQuote, CustomerInfo, SavedCustomer, Profile, Addon, PricingConfig } from './types';
+import {
+  SavedQuote,
+  SavedWpcQuote,
+  SavedArmoredQuote,
+  CustomerInfo,
+  SavedCustomer,
+  Profile,
+  Addon,
+  PricingConfig,
+} from './types';
 
 // Initialize Firebase App safely
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
@@ -1245,3 +1254,126 @@ export function subscribeToWpcQuotes(onUpdate: (quotes: SavedWpcQuote[]) => void
     return () => {};
   }
 }
+
+export const ARMORED_QUOTES_COLLECTION = 'armored_quotes';
+
+export async function saveArmoredQuoteToCloud(quote: SavedArmoredQuote): Promise<void> {
+  try {
+    const docRef = doc(db, ARMORED_QUOTES_COLLECTION, quote.id);
+    const sanitizedQuote = stripUndefinedDeep(quote);
+    await setDoc(
+      docRef,
+      {
+        ...sanitizedQuote,
+        updatedAt: new Date().toISOString(),
+        serverUpdatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    console.log(`[Firestore] Saved Armored quote ${quote.id} to cloud successfully`);
+    if (quote.customer && quote.customer.name && quote.customer.name.trim()) {
+      try {
+        await saveCustomerToCloud({
+          name: quote.customer.name.trim(),
+          phone: quote.customer.phone?.trim() || '',
+          address: quote.customer.address?.trim() || '',
+        });
+      } catch (custErr) {
+        console.warn('[Firestore] Automatic customer index warning:', custErr);
+      }
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `${ARMORED_QUOTES_COLLECTION}/${quote.id}`);
+  }
+}
+
+export async function fetchArmoredQuotesFromCloud(): Promise<SavedArmoredQuote[]> {
+  try {
+    const quotesQuery = query(
+      collection(db, ARMORED_QUOTES_COLLECTION),
+      orderBy('serverUpdatedAt', 'desc')
+    );
+    const snapshot = await getDocs(quotesQuery).catch(async () => {
+      return await getDocs(collection(db, ARMORED_QUOTES_COLLECTION));
+    });
+
+    const quotes: SavedArmoredQuote[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data() as Partial<SavedArmoredQuote>;
+      const customerData: CustomerInfo = {
+        ...defaultCustomer,
+        ...(data.customer || {}),
+        date: data.customer?.date || data.date || new Date().toLocaleDateString('ar-EG'),
+      };
+
+      const quoteRecord: SavedArmoredQuote = {
+        id: data.id || docSnap.id,
+        name: data.name || 'عرض سعر أبواب مصفحة',
+        customer: customerData,
+        armoredDoors: Array.isArray(data.armoredDoors) ? data.armoredDoors : [],
+        armoredTotal: Number(data.armoredTotal) || 0,
+        date: data.date || new Date().toLocaleDateString('ar-EG'),
+      };
+      quotes.push(quoteRecord);
+    });
+
+    return quotes;
+  } catch (error) {
+    console.error('[Firestore] Error fetching Armored quotes from cloud:', error);
+    if (isPermissionDeniedError(error)) {
+      handleFirestoreError(error, OperationType.LIST, ARMORED_QUOTES_COLLECTION);
+    }
+    return [];
+  }
+}
+
+export async function deleteArmoredQuoteFromCloud(quoteId: string): Promise<void> {
+  try {
+    const docRef = doc(db, ARMORED_QUOTES_COLLECTION, quoteId);
+    await deleteDoc(docRef);
+    console.log(`[Firestore] Deleted Armored quote ${quoteId} from cloud`);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `${ARMORED_QUOTES_COLLECTION}/${quoteId}`);
+  }
+}
+
+export function subscribeToArmoredQuotes(onUpdate: (quotes: SavedArmoredQuote[]) => void): () => void {
+  try {
+    const q = collection(db, ARMORED_QUOTES_COLLECTION);
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const quotes: SavedArmoredQuote[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as Partial<SavedArmoredQuote>;
+          const customerData: CustomerInfo = {
+            ...defaultCustomer,
+            ...(data.customer || {}),
+            date: data.customer?.date || data.date || new Date().toLocaleDateString('ar-EG'),
+          };
+
+          const quoteRecord: SavedArmoredQuote = {
+            id: data.id || docSnap.id,
+            name: data.name || 'عرض سعر أبواب مصفحة',
+            customer: customerData,
+            armoredDoors: Array.isArray(data.armoredDoors) ? data.armoredDoors : [],
+            armoredTotal: Number(data.armoredTotal) || 0,
+            date: data.date || new Date().toLocaleDateString('ar-EG'),
+          };
+          quotes.push(quoteRecord);
+        });
+        onUpdate(quotes);
+      },
+      (err) => {
+        console.warn('[Firestore] Armored quotes realtime subscription issue:', err);
+        if (isPermissionDeniedError(err)) {
+          handleFirestoreError(err, OperationType.LIST, ARMORED_QUOTES_COLLECTION);
+        }
+      }
+    );
+  } catch (error) {
+    console.warn('[Firestore] Armored quotes subscribe init failed:', error);
+    return () => {};
+  }
+}
+

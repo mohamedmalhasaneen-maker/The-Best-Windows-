@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { flushSync } from 'react-dom';
-import { Plus, Calculator, QrCode, FileText, DoorClosed } from 'lucide-react';
+import { Plus, Calculator, QrCode, FileText, DoorClosed, Shield } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 import {
@@ -11,11 +11,14 @@ import {
   Addon,
   SavedQuote,
   SavedWpcQuote,
+  SavedArmoredQuote,
   SavedCustomer,
   PricingConfig,
   WpcDoorItem,
+  ArmoredDoorItem,
 } from './types';
 import { PROFILES, ADDONS, BRAND_NAME } from './constants';
+import { calculateArmoredQuoteTotal } from './constants/armoredConstants';
 import { DevSettingsModal } from './components/DevSettingsModal';
 import {
   saveQuoteToCloud,
@@ -26,6 +29,10 @@ import {
   fetchWpcQuotesFromCloud,
   deleteWpcQuoteFromCloud,
   subscribeToWpcQuotes,
+  saveArmoredQuoteToCloud,
+  fetchArmoredQuotesFromCloud,
+  deleteArmoredQuoteFromCloud,
+  subscribeToArmoredQuotes,
   saveCustomerToCloud,
   fetchCustomersFromCloud,
   deleteCustomerFromCloud,
@@ -41,16 +48,18 @@ import ItemCard from './components/ItemCard';
 import CustomerForm from './components/CustomerForm';
 import DetailedQuoteView from './components/DetailedQuoteView';
 import WpcDetailedQuoteView from './components/WpcDetailedQuoteView';
+import ArmoredDetailedQuoteView from './components/ArmoredDetailedQuoteView';
 import SummaryBox from './components/SummaryBox';
 import PricingTable from './components/PricingTable';
 import Features from './components/Features';
 import QrModal from './components/QrModal';
 import SavedQuotesModal from './components/SavedQuotesModal';
 import SavedWpcQuotesModal from './components/SavedWpcQuotesModal';
+import SavedArmoredQuotesModal from './components/SavedArmoredQuotesModal';
 import CustomersModal from './components/CustomersModal';
 import PasswordModal from './components/PasswordModal';
 import { WpcDoorsSection } from './components/WpcDoorsSection';
-import { MobileView } from './components/mobile/MobileView';
+import { ArmoredDoorsSection } from './components/ArmoredDoorsSection';
 
 const formatCurrency = (value: number) => {
   return (
@@ -61,15 +70,19 @@ const formatCurrency = (value: number) => {
 };
 
 export default function App() {
-  const [activeSystem, setActiveSystem] = useState<'pvc' | 'wpc'>('pvc');
+  const [activeSystem, setActiveSystem] = useState<'pvc' | 'wpc' | 'armored'>('pvc');
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const [isDevModalOpen, setIsDevModalOpen] = useState(false);
   const [isSavedQuotesModalOpen, setIsSavedQuotesModalOpen] = useState(false);
   const [isSavedWpcQuotesModalOpen, setIsSavedWpcQuotesModalOpen] = useState(false);
+  const [isSavedArmoredQuotesModalOpen, setIsSavedArmoredQuotesModalOpen] = useState(false);
   const [isCustomersModalOpen, setIsCustomersModalOpen] = useState(false);
-  const [passwordTarget, setPasswordTarget] = useState<'quotes' | 'wpc-quotes' | 'customers' | null>(null);
+  const [passwordTarget, setPasswordTarget] = useState<
+    'quotes' | 'wpc-quotes' | 'armored-quotes' | 'customers' | null
+  >(null);
   const [activeMainTab, setActiveMainTab] = useState<'input' | 'quote'>('input');
   const [activeWpcMainTab, setActiveWpcMainTab] = useState<'input' | 'quote'>('input');
+  const [activeArmoredMainTab, setActiveArmoredMainTab] = useState<'input' | 'quote'>('input');
 
   const [wpcDoors, setWpcDoors] = useState<WpcDoorItem[]>(() => {
     try {
@@ -85,6 +98,21 @@ export default function App() {
       localStorage.setItem('almekawy_draft_wpc_doors', JSON.stringify(wpcDoors));
     } catch {}
   }, [wpcDoors]);
+
+  const [armoredDoors, setArmoredDoors] = useState<ArmoredDoorItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('almekawy_draft_armored_doors');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('almekawy_draft_armored_doors', JSON.stringify(armoredDoors));
+    } catch {}
+  }, [armoredDoors]);
 
   const [savedCustomers, setSavedCustomers] = useState<SavedCustomer[]>(() => {
     try {
@@ -113,7 +141,29 @@ export default function App() {
     }
   });
 
+  const [savedArmoredQuotes, setSavedArmoredQuotes] = useState<SavedArmoredQuote[]>(() => {
+    try {
+      const saved = localStorage.getItem('almekawy_saved_armored_quotes');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
   const [wpcCustomer, setWpcCustomer] = useState<CustomerInfo>({
+    name: '',
+    phone: '',
+    address: '',
+    date: new Date().toISOString().split('T')[0],
+    deliveryDate: '',
+    discountType: 'cash',
+    discountValue: 0,
+    notes: '',
+    notesAmount: 0,
+    additionalNotes: [],
+  });
+
+  const [armoredCustomer, setArmoredCustomer] = useState<CustomerInfo>({
     name: '',
     phone: '',
     address: '',
@@ -358,6 +408,7 @@ export default function App() {
   useEffect(() => {
     let unsubscribeQuotes: (() => void) | undefined;
     let unsubscribeWpcQuotes: (() => void) | undefined;
+    let unsubscribeArmoredQuotes: (() => void) | undefined;
     let unsubscribeCustomers: (() => void) | undefined;
 
     // Defer secondary quotes/customers listeners slightly so authoritative pricing completes first
@@ -385,6 +436,17 @@ export default function App() {
         }
       });
 
+      unsubscribeArmoredQuotes = subscribeToArmoredQuotes((liveQuotes) => {
+        if (liveQuotes && liveQuotes.length > 0) {
+          setSavedArmoredQuotes(liveQuotes);
+          try {
+            localStorage.setItem('almekawy_saved_armored_quotes', JSON.stringify(liveQuotes));
+          } catch (e) {}
+        } else {
+          fetchArmoredQuotesFromAllSources();
+        }
+      });
+
       unsubscribeCustomers = subscribeToCustomers((liveCustomers) => {
         if (liveCustomers && liveCustomers.length > 0) {
           setSavedCustomers(liveCustomers);
@@ -401,6 +463,7 @@ export default function App() {
       window.clearTimeout(initTimer);
       if (typeof unsubscribeQuotes === 'function') unsubscribeQuotes();
       if (typeof unsubscribeWpcQuotes === 'function') unsubscribeWpcQuotes();
+      if (typeof unsubscribeArmoredQuotes === 'function') unsubscribeArmoredQuotes();
       if (typeof unsubscribeCustomers === 'function') unsubscribeCustomers();
     };
   }, []);
@@ -498,10 +561,11 @@ export default function App() {
   const addNewItem = () => {
     setActiveMainTab('input');
     const defaultProfile = Object.keys(effectiveProfiles)[0] || 'newline';
+    const newId = Date.now();
     setItems([
       ...items,
       {
-        id: Date.now(),
+        id: newId,
         title: `بند رقم ${items.length + 1}`,
         itemType: 'window',
         width: 100,
@@ -514,6 +578,7 @@ export default function App() {
         quantity: 1,
       },
     ]);
+    return newId;
   };
 
   const handleDuplicateItem = (itemToDuplicate: QuoteItem) => {
@@ -926,6 +991,15 @@ export default function App() {
     setActiveMainTab('input');
   };
 
+  const handleSelectWpcCustomer = (selected: SavedCustomer) => {
+    setWpcCustomer((prev) => ({
+      ...prev,
+      name: selected.name,
+      phone: selected.phone,
+      address: selected.address || prev.address,
+    }));
+  };
+
   const handleSaveCustomerFromForm = async () => {
     if (!customer.name?.trim() || !customer.phone?.trim()) return;
     await handleSaveCustomer({
@@ -1079,6 +1153,119 @@ export default function App() {
     handleSaveCurrentWpcQuote(defaultName);
   };
 
+  // Independent Armored Doors handlers
+  const handleArmoredCustomerChange = (field: keyof CustomerInfo, value: any) => {
+    setArmoredCustomer((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleSelectArmoredCustomer = (selected: SavedCustomer) => {
+    setArmoredCustomer((prev) => ({
+      ...prev,
+      name: selected.name,
+      phone: selected.phone,
+      address: selected.address || prev.address,
+    }));
+  };
+
+  const handleAddArmoredDoor = (newDoor: ArmoredDoorItem) => {
+    setArmoredDoors((prev) => [...prev, newDoor]);
+  };
+
+  const handleUpdateArmoredDoor = (id: number, updatedFields: Partial<ArmoredDoorItem>) => {
+    setArmoredDoors((prev) =>
+      prev.map((d) => (d.id === id ? ({ ...d, ...updatedFields } as ArmoredDoorItem) : d))
+    );
+  };
+
+  const handleRemoveArmoredDoor = (id: number) => {
+    setArmoredDoors((prev) => prev.filter((d) => d.id !== id));
+  };
+
+  const handleDuplicateArmoredDoor = (door: ArmoredDoorItem) => {
+    const duplicate: ArmoredDoorItem = {
+      ...door,
+      id: Date.now(),
+      title: `${door.title} (نسخة)`,
+    };
+    setArmoredDoors((prev) => [...prev, duplicate]);
+  };
+
+  const armoredTotalPrice = useMemo(() => {
+    return calculateArmoredQuoteTotal(armoredDoors);
+  }, [armoredDoors]);
+
+  const fetchArmoredQuotesFromAllSources = async () => {
+    try {
+      const cloudQuotes = await fetchArmoredQuotesFromCloud();
+      if (cloudQuotes && cloudQuotes.length > 0) {
+        setSavedArmoredQuotes(cloudQuotes);
+        try {
+          localStorage.setItem('almekawy_saved_armored_quotes', JSON.stringify(cloudQuotes));
+        } catch (e) {}
+      }
+    } catch (err) {
+      console.warn('Cloud Armored quotes fetch fallback:', err);
+    }
+  };
+
+  const handleSaveCurrentArmoredQuote = (name: string) => {
+    const newArmoredQuote: SavedArmoredQuote = {
+      id: Date.now().toString(),
+      name,
+      customer: armoredCustomer,
+      armoredDoors,
+      armoredTotal: armoredTotalPrice,
+      date: new Date().toLocaleDateString('ar-EG'),
+    };
+
+    const updated = [
+      newArmoredQuote,
+      ...savedArmoredQuotes.filter((q) => q.id !== newArmoredQuote.id),
+    ];
+    setSavedArmoredQuotes(updated);
+    try {
+      localStorage.setItem('almekawy_saved_armored_quotes', JSON.stringify(updated));
+    } catch (e) {}
+
+    saveArmoredQuoteToCloud(newArmoredQuote).catch((err) => {
+      console.warn('Firestore Armored save error:', err);
+    });
+
+    if (armoredCustomer.name?.trim()) {
+      handleSaveCustomer({
+        name: armoredCustomer.name.trim(),
+        phone: (armoredCustomer.phone || '').trim(),
+        address: (armoredCustomer.address || '').trim(),
+      }).catch(() => {});
+    }
+  };
+
+  const handleLoadArmoredQuote = (quote: SavedArmoredQuote) => {
+    setArmoredCustomer(quote.customer);
+    setArmoredDoors(quote.armoredDoors || []);
+    setActiveSystem('armored');
+    setActiveArmoredMainTab('input');
+  };
+
+  const handleDeleteArmoredQuote = (id: string) => {
+    const updated = savedArmoredQuotes.filter((q) => q.id !== id);
+    setSavedArmoredQuotes(updated);
+    try {
+      localStorage.setItem('almekawy_saved_armored_quotes', JSON.stringify(updated));
+    } catch (e) {}
+
+    deleteArmoredQuoteFromCloud(id).catch((err) => {
+      console.warn('Firestore Armored delete error:', err);
+    });
+  };
+
+  const handleSaveArmoredQuoteAuto = () => {
+    const defaultName = armoredCustomer.name?.trim()
+      ? `عرض سعر أبواب مصفحة - ${armoredCustomer.name.trim()}`
+      : `عرض سعر أبواب مصفحة - ${new Date().toLocaleDateString('ar-EG')}`;
+    handleSaveCurrentArmoredQuote(defaultName);
+  };
+
   const handlePrint = () => {
     setActiveMainTab('quote');
     if (window.innerWidth < 768) {
@@ -1094,13 +1281,13 @@ export default function App() {
   };
 
   const renderSystemSwitcherBar = () => (
-    <div className="bg-[#0F172A] text-white p-4 sm:p-5 rounded-3xl border-2 border-[#F59E0B] shadow-lg mb-8 print:hidden">
+    <div className="bg-[#0F172A] text-white p-3.5 sm:p-5 rounded-3xl border-2 border-[#F59E0B] shadow-lg mb-8 print:hidden">
       <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-center gap-4">
-        <div className="flex bg-slate-800 p-1.5 rounded-2xl border border-slate-700 w-full sm:w-auto shadow-inner">
+        <div className="grid grid-cols-1 sm:grid-cols-3 bg-slate-800 p-1.5 rounded-2xl border border-slate-700 w-full sm:w-auto gap-1.5 shadow-inner">
           <button
             type="button"
             onClick={() => setActiveSystem('pvc')}
-            className={`flex-1 sm:flex-initial px-6 py-2.5 rounded-xl font-black text-xs sm:text-sm transition cursor-pointer ${
+            className={`min-h-[44px] px-4 sm:px-6 py-2.5 rounded-xl font-black text-xs sm:text-sm transition cursor-pointer flex items-center justify-center ${
               activeSystem === 'pvc'
                 ? 'bg-[#F59E0B] text-slate-950 shadow-md'
                 : 'text-slate-300 hover:text-white'
@@ -1111,13 +1298,25 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveSystem('wpc')}
-            className={`flex-1 sm:flex-initial px-6 py-2.5 rounded-xl font-black text-xs sm:text-sm transition cursor-pointer ${
+            className={`min-h-[44px] px-4 sm:px-6 py-2.5 rounded-xl font-black text-xs sm:text-sm transition cursor-pointer flex items-center justify-center ${
               activeSystem === 'wpc'
                 ? 'bg-[#F59E0B] text-slate-950 shadow-md'
                 : 'text-slate-300 hover:text-white'
             }`}
           >
             نظام عروض أسعار WPC
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSystem('armored')}
+            className={`min-h-[44px] px-4 sm:px-6 py-2.5 rounded-xl font-black text-xs sm:text-sm transition cursor-pointer flex items-center justify-center gap-1.5 ${
+              activeSystem === 'armored'
+                ? 'bg-[#F59E0B] text-slate-950 shadow-md'
+                : 'text-slate-300 hover:text-white'
+            }`}
+          >
+            <Shield size={15} />
+            <span>أبواب مصفحة</span>
           </button>
         </div>
       </div>
@@ -1126,7 +1325,7 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen ${
+      className={`min-h-screen overflow-x-hidden ${
         theme === 'dark' ? 'dark-mode' : ''
       } bg-[#F8F9FA] text-[#1A1A1A] font-sans selection:bg-yellow-200 selection:text-[#0F172A] transition-colors duration-300`}
       dir="rtl"
@@ -1134,7 +1333,7 @@ export default function App() {
 
       {/* 1. WPC System Workspace */}
       {activeSystem === 'wpc' && (
-        <div className="pb-24 md:pb-0 print:pb-0">
+        <div className="pb-12 md:pb-0 print:pb-0">
           <Header
             onOpenDevSettings={() => setIsDevModalOpen(true)}
             theme={theme}
@@ -1144,7 +1343,7 @@ export default function App() {
             onSaveQuoteAuto={handleSaveWpcQuoteAuto}
             customersCount={savedCustomers.length}
             onOpenCustomers={() => setPasswordTarget('customers')}
-            isPrimaryHeading={!isMobileViewport}
+            isPrimaryHeading={true}
           />
 
           <main className={`w-full max-w-none mx-auto ${activeWpcMainTab === 'quote' ? 'p-0' : 'px-4 sm:px-8 py-8 md:py-12'} print:max-w-none print:p-0 print:m-0 transition-all duration-500`}>
@@ -1233,7 +1432,7 @@ export default function App() {
 
       {/* 2. PVC System Workspace */}
       {activeSystem === 'pvc' && (
-        <div className="pb-24 md:pb-0 print:pb-0">
+        <div className="pb-12 md:pb-0 print:pb-0">
           {activeMainTab === 'input' && (
             <Header
               onOpenDevSettings={() => setIsDevModalOpen(true)}
@@ -1244,7 +1443,7 @@ export default function App() {
               onSaveQuoteAuto={handleSaveQuoteAuto}
               customersCount={savedCustomers.length}
               onOpenCustomers={() => setPasswordTarget('customers')}
-              isPrimaryHeading={!isMobileViewport}
+              isPrimaryHeading={true}
             />
           )}
 
@@ -1316,9 +1515,9 @@ export default function App() {
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={addNewItem}
-                  className="hidden md:flex items-center gap-3 bg-[#0F172A] hover:bg-black text-white px-10 py-5 rounded-2xl font-black text-xl shadow-lg transition-all w-full md:w-auto justify-center cursor-pointer"
+                  className="flex items-center gap-3 bg-[#0F172A] hover:bg-black text-white px-6 sm:px-10 py-4 sm:py-5 rounded-2xl font-black text-base sm:text-xl shadow-lg transition-all w-full md:w-auto justify-center cursor-pointer"
                 >
-                  <Plus size={28} />
+                  <Plus size={24} className="sm:w-7 sm:h-7" />
                   إضافة بند جديد (شباك / باب)
                 </motion.button>
               </div>
@@ -1347,6 +1546,120 @@ export default function App() {
                   addons={effectiveAddons}
                   wpcDoors={[]}
                   onBack={() => setActiveMainTab('input')}
+                />
+              </div>
+            )}
+
+            <div className="print:hidden">
+              <Features />
+            </div>
+
+            <footer className="mt-12 pt-6 border-t border-slate-200 flex items-center justify-center print:hidden">
+              <button
+                type="button"
+                onClick={() => setIsQrModalOpen(true)}
+                className="min-h-[44px] px-6 py-2.5 bg-[#0F172A] hover:bg-slate-800 text-[#FACC15] border border-slate-700 rounded-2xl text-xs sm:text-sm font-black flex items-center gap-2 transition-all active:scale-95 shadow-sm cursor-pointer whitespace-nowrap"
+              >
+                <QrCode size={16} className="text-[#FACC15]" />
+                <span>رموز الاستجابة السريعة (QR)</span>
+              </button>
+            </footer>
+          </main>
+        </div>
+      )}
+
+      {/* 3. Armored Doors System Workspace (Independent) */}
+      {activeSystem === 'armored' && (
+        <div className="pb-12 md:pb-0 print:pb-0">
+          {activeArmoredMainTab === 'input' && (
+            <Header
+              onOpenDevSettings={() => setIsDevModalOpen(true)}
+              theme={theme}
+              onToggleTheme={toggleTheme}
+              savedQuotesCount={savedArmoredQuotes.length}
+              onOpenSavedQuotes={() => setPasswordTarget('armored-quotes')}
+              onSaveQuoteAuto={handleSaveArmoredQuoteAuto}
+              customersCount={savedCustomers.length}
+              onOpenCustomers={() => setPasswordTarget('customers')}
+              isPrimaryHeading={true}
+            />
+          )}
+
+          <main
+            className={`w-full max-w-none mx-auto ${
+              activeArmoredMainTab === 'quote' ? 'p-0' : 'px-4 sm:px-8 py-8 md:py-12'
+            } print:max-w-none print:p-0 print:m-0 transition-all duration-500`}
+          >
+            {/* System Switcher Bar */}
+            {renderSystemSwitcherBar()}
+
+            {/* Armored Doors Navigation Tabs */}
+            <div className="flex bg-slate-200/60 p-1.5 rounded-2xl mb-8 max-w-3xl mx-auto border border-slate-200/80 print:hidden shadow-inner relative justify-between gap-1.5">
+              <button
+                onClick={() => setActiveArmoredMainTab('input')}
+                className={`flex-1 py-3 px-3 sm:px-4 rounded-xl font-black text-xs sm:text-sm transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative z-10 select-none ${
+                  activeArmoredMainTab === 'input'
+                    ? 'bg-[#0F172A] text-[#FACC15] shadow-md'
+                    : 'text-slate-600 hover:text-[#0F172A] hover:bg-slate-200'
+                }`}
+              >
+                <Shield size={16} />
+                <span>1. إعداد أبواب مصفحة ({armoredDoors.length})</span>
+              </button>
+
+              <button
+                onClick={() => setActiveArmoredMainTab('quote')}
+                className={`flex-1 py-3 px-3 sm:px-4 rounded-xl font-black text-xs sm:text-sm transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative z-10 select-none ${
+                  activeArmoredMainTab === 'quote'
+                    ? 'bg-[#0F172A] text-[#FACC15] shadow-md'
+                    : 'text-slate-600 hover:text-[#0F172A] hover:bg-slate-200'
+                }`}
+              >
+                <FileText size={16} />
+                <span>2. معاينة عرض سعر أبواب مصفحة (PDF)</span>
+              </button>
+            </div>
+
+            {activeArmoredMainTab === 'input' && (
+              <div className="space-y-8 block print:hidden">
+                <CustomerForm
+                  customer={armoredCustomer}
+                  onChange={handleArmoredCustomerChange}
+                  savedCustomers={savedCustomers}
+                  onOpenCustomersModal={() => setPasswordTarget('customers')}
+                  onSaveCustomerToDirectory={async () => {
+                    if (!armoredCustomer.name?.trim() || !armoredCustomer.phone?.trim()) return;
+                    await handleSaveCustomer({
+                      name: armoredCustomer.name.trim(),
+                      phone: armoredCustomer.phone.trim(),
+                      address: armoredCustomer.address?.trim() || '',
+                    });
+                  }}
+                  onSelectCustomer={handleSelectArmoredCustomer}
+                />
+
+                <ArmoredDoorsSection
+                  armoredDoors={armoredDoors}
+                  onAddDoor={handleAddArmoredDoor}
+                  onUpdateDoor={handleUpdateArmoredDoor}
+                  onRemoveDoor={handleRemoveArmoredDoor}
+                  onDuplicateDoor={handleDuplicateArmoredDoor}
+                  formatCurrency={formatCurrency}
+                  onSaveQuoteAuto={handleSaveArmoredQuoteAuto}
+                  onNavigateNext={() => setActiveArmoredMainTab('quote')}
+                />
+              </div>
+            )}
+
+            {(activeArmoredMainTab === 'quote' || isNativePrinting) && (
+              <div className={activeArmoredMainTab === 'quote' ? 'block' : 'hidden print:block'}>
+                <ArmoredDetailedQuoteView
+                  customer={armoredCustomer}
+                  armoredDoors={armoredDoors}
+                  formatCurrency={formatCurrency}
+                  isMobileViewport={isMobileViewport}
+                  onBack={() => setActiveArmoredMainTab('input')}
+                  onSaveQuoteAuto={handleSaveArmoredQuoteAuto}
                 />
               </div>
             )}
@@ -1422,12 +1735,36 @@ export default function App() {
       </AnimatePresence>
 
       <AnimatePresence>
+        {isSavedArmoredQuotesModalOpen && (
+          <SavedArmoredQuotesModal
+            isOpen={isSavedArmoredQuotesModalOpen}
+            onClose={() => setIsSavedArmoredQuotesModalOpen(false)}
+            savedQuotes={savedArmoredQuotes}
+            onSaveCurrent={handleSaveCurrentArmoredQuote}
+            onLoadQuote={handleLoadArmoredQuote}
+            onDeleteQuote={handleDeleteArmoredQuote}
+            currentCustomerName={armoredCustomer.name}
+            formatCurrency={formatCurrency}
+            onRefresh={fetchArmoredQuotesFromAllSources}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {isCustomersModalOpen && (
           <CustomersModal
             isOpen={isCustomersModalOpen}
             onClose={() => setIsCustomersModalOpen(false)}
             customers={savedCustomers}
-            onSelectCustomer={handleSelectCustomer}
+            onSelectCustomer={(selected) => {
+              if (activeSystem === 'wpc') {
+                handleSelectWpcCustomer(selected);
+              } else if (activeSystem === 'armored') {
+                handleSelectArmoredCustomer(selected);
+              } else {
+                handleSelectCustomer(selected);
+              }
+            }}
             onSaveCustomer={handleSaveCustomer}
             onDeleteCustomer={handleDeleteCustomer}
             onRefresh={fetchCustomersFromAllSources}
@@ -1449,6 +1786,9 @@ export default function App() {
               } else if (target === 'wpc-quotes') {
                 fetchWpcQuotesFromAllSources();
                 setIsSavedWpcQuotesModalOpen(true);
+              } else if (target === 'armored-quotes') {
+                fetchArmoredQuotesFromAllSources();
+                setIsSavedArmoredQuotesModalOpen(true);
               } else if (target === 'customers') {
                 fetchCustomersFromAllSources();
                 setIsCustomersModalOpen(true);

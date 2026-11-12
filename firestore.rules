@@ -148,6 +148,31 @@ service cloud.firestore {
         && (!('serverUpdatedAt' in data) || data.serverUpdatedAt is timestamp);
     }
 
+    function isValidArmoredQuote(data) {
+      return data.keys().hasAll(['id', 'name', 'customer', 'armoredDoors', 'armoredTotal'])
+        && data.keys().hasOnly([
+          'id',
+          'name',
+          'customer',
+          'armoredDoors',
+          'armoredTotal',
+          'date',
+          'createdAt',
+          'updatedAt',
+          'serverUpdatedAt'
+        ])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 256
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 500
+        && data.customer is map && data.customer.size() <= 30
+        && data.armoredDoors is list && data.armoredDoors.size() <= 500
+        && (data.armoredDoors.size() == 0 || data.armoredDoors[0] is map)
+        && data.armoredTotal is number && data.armoredTotal >= 0
+        && (!('date' in data) || (data.date is string && data.date.size() <= 100))
+        && (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 100))
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 100))
+        && (!('serverUpdatedAt' in data) || data.serverUpdatedAt is timestamp);
+    }
+
     // Connection health check endpoint used on boot
     match /test/connection {
       allow get: if true;
@@ -234,6 +259,26 @@ service cloud.firestore {
           'serverUpdatedAt'
         ]);
       allow delete: if isValidDocId(customerId);
+    }
+
+    match /armored_quotes/{quoteId} {
+      allow get: if isValidDocId(quoteId);
+      allow list: if true;
+      allow create: if isValidDocId(quoteId) && isValidArmoredQuote(incoming());
+      allow update: if isValidArmoredQuote(incoming())
+        && isValidDocId(quoteId)
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'id',
+          'name',
+          'customer',
+          'armoredDoors',
+          'armoredTotal',
+          'date',
+          'createdAt',
+          'updatedAt',
+          'serverUpdatedAt'
+        ]);
+      allow delete: if isValidDocId(quoteId);
     }
   }
 }
