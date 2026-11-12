@@ -17,22 +17,29 @@ import {
   Maximize2,
   FileText,
   Info,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   WpcDoorItem,
   WpcSizeType,
-  WpcPackageType,
   WpcAddons,
-  WPC_PRICES,
-  WPC_PACKAGES_INFO,
+  WpcPricingConfig,
+  DEFAULT_WPC_PRICING_CONFIG,
   WPC_STANDARD_SIZES,
   calculateWpcDoorPrice,
+  getWpcDoorDisplayData,
   formatWpcDoorSize,
+  resolveWpcPackageMeta,
 } from '../constants/wpcConstants';
 
 interface WpcDoorsSectionProps {
   wpcDoors: WpcDoorItem[];
+  wpcPricing?: WpcPricingConfig;
+  pricingSyncStatus?: 'loading' | 'synced' | 'error';
+  pricingErrorText?: string | null;
+  onRetryLoadPricing?: () => void;
   onAddDoor: (door: WpcDoorItem) => void;
   onUpdateDoor: (id: number, door: Partial<WpcDoorItem>) => void;
   onRemoveDoor: (id: number) => void;
@@ -44,6 +51,10 @@ interface WpcDoorsSectionProps {
 
 export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
   wpcDoors,
+  wpcPricing = DEFAULT_WPC_PRICING_CONFIG,
+  pricingSyncStatus = 'synced',
+  pricingErrorText = null,
+  onRetryLoadPricing,
   onAddDoor,
   onUpdateDoor,
   onRemoveDoor,
@@ -52,16 +63,41 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
   onNavigatePrev,
   onNavigateNext,
 }) => {
+  const allPackages =
+    Array.isArray(wpcPricing.packages) && wpcPricing.packages.length > 0
+      ? wpcPricing.packages
+      : DEFAULT_WPC_PRICING_CONFIG.packages;
+  const activePackages = allPackages.filter((p) => p.isActive !== false);
+  const selectablePackages = activePackages.length > 0 ? activePackages : allPackages;
+
+  const addonMap = wpcPricing.addons || DEFAULT_WPC_PRICING_CONFIG.addons;
+  const getAddonCfg = (key: keyof WpcAddons) => {
+    const item = addonMap[key];
+    const fallback = DEFAULT_WPC_PRICING_CONFIG.addons[key];
+    return {
+      name: item?.name || fallback.name,
+      description: item?.description || fallback.description,
+      price: Number.isFinite(Number(item?.price)) ? Number(item.price) : fallback.price,
+    };
+  };
+
   // Draft builder state
   const [editingId, setEditingId] = useState<number | null>(null);
   const [title, setTitle] = useState('');
   const [sizeType, setSizeType] = useState<WpcSizeType>('80x215');
   const [customWidth, setCustomWidth] = useState<number>(85);
   const [customHeight, setCustomHeight] = useState<number>(215);
-  const [basePackage, setBasePackage] = useState<WpcPackageType>(9000);
+  const [selectedPackageId, setSelectedPackageId] = useState<string>(
+    () => selectablePackages[0]?.id || '9000'
+  );
   const [addons, setAddons] = useState<WpcAddons>({});
   const [quantity, setQuantity] = useState<number>(1);
   const [showValidation, setShowValidation] = useState(false);
+
+  const effectivePackage =
+    editingId !== null
+      ? resolveWpcPackageMeta({ packageId: selectedPackageId }, wpcPricing)
+      : selectablePackages.find((p) => p.id === selectedPackageId) || selectablePackages[0];
 
   // Reset form helper
   const resetForm = () => {
@@ -70,13 +106,13 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
     setSizeType('80x215');
     setCustomWidth(85);
     setCustomHeight(215);
-    setBasePackage(9000);
+    setSelectedPackageId(selectablePackages[0]?.id || '9000');
     setAddons({});
     setQuantity(1);
     setShowValidation(false);
   };
 
-  // Switch size type handler: automatically handles "مقاس خاص" (+600 EGP)
+  // Switch size type handler: automatically handles "مقاس خاص"
   const handleSelectSize = (selected: WpcSizeType) => {
     setSizeType(selected);
     if (selected === 'custom') {
@@ -95,13 +131,14 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
     }
   };
 
-  // Switch package handler: when switching to 9000, accessories are automatically covered
-  const handleSelectPackage = (pkg: WpcPackageType) => {
-    setBasePackage(pkg);
-    if (pkg === 9000) {
+  // Switch package handler: when package includes accessories, clear optional accessories fee
+  const handleSelectPackage = (pkgId: string) => {
+    setSelectedPackageId(pkgId);
+    const pkg = allPackages.find((p) => p.id === pkgId);
+    if (pkg?.hasAccessoriesIncluded) {
       setAddons((prev) => {
         const next = { ...prev };
-        delete next.accessories; // Included for free in 9000 package
+        delete next.accessories;
         return next;
       });
     }
@@ -114,7 +151,7 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
       return;
     }
 
-    if (key === 'accessories' && basePackage === 9000) {
+    if (key === 'accessories' && effectivePackage.hasAccessoriesIncluded) {
       // Locked as included
       return;
     }
@@ -147,7 +184,11 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
     setSizeType(door.sizeType);
     setCustomWidth(door.customWidth || 85);
     setCustomHeight(door.customHeight || 215);
-    setBasePackage(door.basePackage);
+    const resolvedPkg = resolveWpcPackageMeta(
+      { packageId: door.packageId, basePackage: door.basePackage },
+      wpcPricing
+    );
+    setSelectedPackageId(resolvedPkg.id);
     setAddons({ ...door.addons });
     setQuantity(door.quantity || 1);
     setShowValidation(false);
@@ -160,18 +201,25 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
   };
 
   // Live calculation for the door currently being configured
-  const currentCalculation = calculateWpcDoorPrice({
-    sizeType,
-    customWidth,
-    customHeight,
-    basePackage,
-    addons,
-    quantity,
-  });
+  const currentCalculation = calculateWpcDoorPrice(
+    {
+      sizeType,
+      customWidth,
+      customHeight,
+      packageId: effectivePackage.id,
+      basePackage: effectivePackage.price,
+      addons,
+      quantity,
+    },
+    wpcPricing
+  );
 
   // Submit / save door
   const handleSubmitDoor = (e: React.FormEvent) => {
     e.preventDefault();
+    if (pricingSyncStatus === 'error') {
+      return;
+    }
 
     if (sizeType === 'custom' && (!customWidth || !customHeight || customWidth <= 0 || customHeight <= 0)) {
       setShowValidation(true);
@@ -188,11 +236,20 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
       sizeType,
       customWidth: sizeType === 'custom' ? customWidth : undefined,
       customHeight: sizeType === 'custom' ? customHeight : undefined,
-      basePackage,
+      basePackage: effectivePackage.price,
+      packageId: effectivePackage.id,
+      packageName: effectivePackage.name,
+      packageBadge: effectivePackage.badge,
+      basePackagePrice: effectivePackage.price,
       addons: {
         ...addons,
         customSize: sizeType === 'custom' ? true : addons.customSize,
       },
+      activeAddonsSnapshot: currentCalculation.activeAddonsList.map((a) => ({
+        key: String(a.key),
+        name: a.name,
+        price: a.price,
+      })),
       quantity: Math.max(1, quantity || 1),
       unitPrice: currentCalculation.unitPrice,
       totalPrice: currentCalculation.totalPrice,
@@ -207,12 +264,51 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
     resetForm();
   };
 
-  // Section Grand Total
+  const accCfg = getAddonCfg('accessories');
+  const engCfg = getAddonCfg('engraving');
+  const prnCfg = getAddonCfg('printing');
+  const csCfg = getAddonCfg('customSize');
+  const csSingleCfg = getAddonCfg('claddingSingle');
+  const csDoubleCfg = getAddonCfg('claddingDouble');
+
+  // Section Grand Total (uses stored item snapshots)
   const totalWpcDoorsCount = wpcDoors.reduce((sum, d) => sum + (d.quantity || 1), 0);
-  const totalWpcPrice = wpcDoors.reduce((sum, d) => sum + d.totalPrice, 0);
+  const totalWpcPrice = wpcDoors.reduce(
+    (sum, d) => sum + getWpcDoorDisplayData(d).totalPrice,
+    0
+  );
 
   return (
     <div className="w-full space-y-8" dir="rtl">
+      {/* DB Error Alert */}
+      {pricingSyncStatus === 'error' && (
+        <div
+          role="alert"
+          className="bg-rose-50 border-2 border-rose-300 text-rose-900 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm"
+        >
+          <div className="flex items-start gap-3">
+            <AlertCircle size={20} className="text-rose-600 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="font-black text-sm">تعذر تحميل أسعار أبواب WPC من قاعدة البيانات</h4>
+              <p className="text-xs font-bold text-rose-700 mt-0.5">
+                {pricingErrorText ||
+                  'فشل الاتصال بقاعدة البيانات لتحميل أحدث أسعار أبواب WPC والإضافات. تم إيقاف إضافة بنود جديدة مؤقتاً لضمان عدم اعتماد أسعار قديمة.'}
+              </p>
+            </div>
+          </div>
+          {onRetryLoadPricing && (
+            <button
+              type="button"
+              onClick={onRetryLoadPricing}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shrink-0 cursor-pointer transition"
+            >
+              <RefreshCw size={14} />
+              <span>إعادة المحاولة</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* 1. Header Banner */}
       <motion.div
         initial={{ opacity: 0, y: 10 }}
@@ -305,7 +401,7 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
               </label>
               {sizeType === 'custom' && (
                 <span className="text-[11px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-lg">
-                  يُضاف تلقائياً مقاس خاص (+600 ج.م)
+                  يُضاف تلقائياً {csCfg.name} (+{csCfg.price.toLocaleString('en-US')} ج.م)
                 </span>
               )}
             </div>
@@ -363,7 +459,7 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
                     sizeType === 'custom' ? 'text-[#FACC15]' : 'text-amber-700'
                   }`}
                 >
-                  أبعاد مخصصة (+600 ج.م)
+                  أبعاد مخصصة (+{csCfg.price.toLocaleString('en-US')} ج.م)
                 </span>
               </button>
             </div>
@@ -440,93 +536,79 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
             </AnimatePresence>
           </div>
 
-          {/* C. Base Packages Selection (Strictly Radio / Mutually Exclusive) */}
+          {/* C. Base Packages / Types Selection (Dynamic from Database) */}
           <div className="space-y-3">
             <label className="block text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
               <ShieldCheck size={16} className="text-[#0F172A]" />
-              <span>2. اختيار الباقة الأساسية (إلزامي):</span>
+              <span>2. اختيار الباقة أو نوع الباب الأساسي (إلزامي):</span>
             </label>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Package 1: 9,000 EGP */}
-              <div
-                onClick={() => handleSelectPackage(9000)}
-                className={`p-4 sm:p-5 rounded-2xl border-2 transition-all cursor-pointer relative ${
-                  basePackage === 9000
-                    ? 'border-[#0F172A] bg-slate-900 text-white shadow-lg'
-                    : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-800'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div
-                      className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 ${
-                        basePackage === 9000
-                          ? 'border-[#FACC15] bg-[#FACC15] text-[#0F172A]'
-                          : 'border-slate-300 bg-white'
-                      }`}
-                    >
-                      {basePackage === 9000 && <Check size={14} strokeWidth={3} />}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg font-black font-display tracking-tight">باقة 9,000 ج.م</span>
-                        <span className="text-[10px] font-black bg-[#FACC15] text-[#0F172A] px-2 py-0.5 rounded-md">
-                          شامل كامل
-                        </span>
+              {selectablePackages.map((pkg) => {
+                const isSelected = effectivePackage.id === pkg.id;
+                return (
+                  <div
+                    key={pkg.id}
+                    onClick={() => handleSelectPackage(pkg.id)}
+                    className={`p-4 sm:p-5 rounded-2xl border-2 transition-all cursor-pointer relative ${
+                      isSelected
+                        ? 'border-[#0F172A] bg-slate-900 text-white shadow-lg'
+                        : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-800'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div
+                          className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                            isSelected
+                              ? 'border-[#FACC15] bg-[#FACC15] text-[#0F172A]'
+                              : 'border-slate-300 bg-white'
+                          }`}
+                        >
+                          {isSelected && <Check size={14} strokeWidth={3} />}
+                        </div>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-lg font-black font-display tracking-tight">
+                              {pkg.name}
+                            </span>
+                            {pkg.badge && (
+                              <span
+                                className={`text-[10px] font-black px-2 py-0.5 rounded-md ${
+                                  pkg.hasAccessoriesIncluded
+                                    ? 'bg-[#FACC15] text-[#0F172A]'
+                                    : 'bg-slate-200 text-slate-800'
+                                }`}
+                              >
+                                {pkg.badge}
+                              </span>
+                            )}
+                          </div>
+                          <p
+                            className={`text-xs mt-1 font-bold ${
+                              isSelected ? 'text-slate-300' : 'text-slate-600'
+                            }`}
+                          >
+                            {pkg.description}
+                          </p>
+                        </div>
                       </div>
-                      <p className={`text-xs mt-1 font-bold ${basePackage === 9000 ? 'text-slate-300' : 'text-slate-600'}`}>
-                        شامل النقل والتركيب والإكسسوارات الكاملة (مقبض + كالون + مفصلات)
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-left font-black font-mono text-xl shrink-0 text-[#FACC15]">
-                    9,000 ج.م
-                  </div>
-                </div>
-              </div>
-
-              {/* Package 2: 7,000 EGP */}
-              <div
-                onClick={() => handleSelectPackage(7000)}
-                className={`p-4 sm:p-5 rounded-2xl border-2 transition-all cursor-pointer relative ${
-                  basePackage === 7000
-                    ? 'border-[#0F172A] bg-slate-900 text-white shadow-lg'
-                    : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-800'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div
-                      className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 ${
-                        basePackage === 7000
-                          ? 'border-[#FACC15] bg-[#FACC15] text-[#0F172A]'
-                          : 'border-slate-300 bg-white'
-                      }`}
-                    >
-                      {basePackage === 7000 && <Check size={14} strokeWidth={3} />}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg font-black font-display tracking-tight">باقة 7,000 ج.م</span>
-                        <span className="text-[10px] font-black bg-slate-200 text-slate-800 px-2 py-0.5 rounded-md">
-                          توريد فقط
-                        </span>
+                      <div
+                        className={`text-left font-black font-mono text-xl shrink-0 ${
+                          isSelected ? 'text-[#FACC15]' : 'text-[#0F172A]'
+                        }`}
+                        dir="ltr"
+                      >
+                        {formatCurrency(pkg.price)}
                       </div>
-                      <p className={`text-xs mt-1 font-bold ${basePackage === 7000 ? 'text-slate-300' : 'text-slate-600'}`}>
-                        بدون نقل أو تركيب أو إكسسوارات (توريد المصنع فقط)
-                      </p>
                     </div>
                   </div>
-                  <div className="text-left font-black font-mono text-xl shrink-0 text-[#FACC15]">
-                    7,000 ج.م
-                  </div>
-                </div>
-              </div>
+                );
+              })}
             </div>
           </div>
 
-          {/* D. Addons Section with Mutual Exclusions */}
+          {/* D. Addons Section with Mutual Exclusions (Dynamic Prices) */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <label className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
@@ -539,11 +621,11 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {/* 1. إكسسوارات (950 ج.م) */}
+              {/* 1. إكسسوارات */}
               <div
                 onClick={() => handleToggleAddon('accessories')}
                 className={`p-3.5 rounded-2xl border-2 transition-all flex items-center justify-between gap-3 ${
-                  basePackage === 9000
+                  effectivePackage.hasAccessoriesIncluded
                     ? 'border-emerald-300 bg-emerald-50/60 opacity-90 cursor-not-allowed'
                     : addons.accessories
                     ? 'border-[#0F172A] bg-[#0F172A] text-white shadow-sm cursor-pointer'
@@ -553,40 +635,50 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
                 <div className="flex items-center gap-2.5">
                   <div
                     className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${
-                      basePackage === 9000
+                      effectivePackage.hasAccessoriesIncluded
                         ? 'border-emerald-500 bg-emerald-500 text-white'
                         : addons.accessories
                         ? 'border-[#FACC15] bg-[#FACC15] text-[#0F172A]'
                         : 'border-slate-300 bg-white'
                     }`}
                   >
-                    {(basePackage === 9000 || addons.accessories) && <Check size={12} strokeWidth={3} />}
+                    {(effectivePackage.hasAccessoriesIncluded || addons.accessories) && (
+                      <Check size={12} strokeWidth={3} />
+                    )}
                   </div>
                   <div>
-                    <div className="text-xs font-black">إكسسوارات كاملة</div>
+                    <div className="text-xs font-black">{accCfg.name}</div>
                     <div
                       className={`text-[10px] ${
-                        basePackage === 9000
+                        effectivePackage.hasAccessoriesIncluded
                           ? 'text-emerald-700 font-extrabold'
                           : addons.accessories
                           ? 'text-slate-300'
                           : 'text-slate-400'
                       }`}
                     >
-                      {basePackage === 9000 ? 'مشمولة مجاناً في باقة 9000' : 'كالون ومقبض ومفصلات'}
+                      {effectivePackage.hasAccessoriesIncluded
+                        ? `مشمولة مجاناً في ${effectivePackage.name}`
+                        : accCfg.description}
                     </div>
                   </div>
                 </div>
                 <div
                   className={`text-xs font-mono font-black shrink-0 ${
-                    basePackage === 9000 ? 'text-emerald-700' : addons.accessories ? 'text-[#FACC15]' : 'text-slate-700'
+                    effectivePackage.hasAccessoriesIncluded
+                      ? 'text-emerald-700'
+                      : addons.accessories
+                      ? 'text-[#FACC15]'
+                      : 'text-slate-700'
                   }`}
                 >
-                  {basePackage === 9000 ? 'مشمول' : '+950 ج.م'}
+                  {effectivePackage.hasAccessoriesIncluded
+                    ? 'مشمول'
+                    : `+${accCfg.price.toLocaleString('en-US')} ج.م`}
                 </div>
               </div>
 
-              {/* 2. حفر (650 ج.م) */}
+              {/* 2. حفر */}
               <div
                 onClick={() => handleToggleAddon('engraving')}
                 className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between gap-3 ${
@@ -606,18 +698,18 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
                     {addons.engraving && <Check size={12} strokeWidth={3} />}
                   </div>
                   <div>
-                    <div className="text-xs font-black">حفر ديكوري ليزر</div>
+                    <div className="text-xs font-black">{engCfg.name}</div>
                     <div className={`text-[10px] ${addons.engraving ? 'text-slate-300' : 'text-slate-400'}`}>
-                      نقوش ميكانيكية مودرن
+                      {engCfg.description}
                     </div>
                   </div>
                 </div>
                 <div className={`text-xs font-mono font-black shrink-0 ${addons.engraving ? 'text-[#FACC15]' : 'text-slate-700'}`}>
-                  +650 ج.م
+                  +{engCfg.price.toLocaleString('en-US')} ج.م
                 </div>
               </div>
 
-              {/* 3. طباعة (500 ج.م) */}
+              {/* 3. طباعة */}
               <div
                 onClick={() => handleToggleAddon('printing')}
                 className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between gap-3 ${
@@ -637,18 +729,18 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
                     {addons.printing && <Check size={12} strokeWidth={3} />}
                   </div>
                   <div>
-                    <div className="text-xs font-black">طباعة وتشكيل فني</div>
+                    <div className="text-xs font-black">{prnCfg.name}</div>
                     <div className={`text-[10px] ${addons.printing ? 'text-slate-300' : 'text-slate-400'}`}>
-                      ألوان وملمس خشبي مميز
+                      {prnCfg.description}
                     </div>
                   </div>
                 </div>
                 <div className={`text-xs font-mono font-black shrink-0 ${addons.printing ? 'text-[#FACC15]' : 'text-slate-700'}`}>
-                  +500 ج.م
+                  +{prnCfg.price.toLocaleString('en-US')} ج.م
                 </div>
               </div>
 
-              {/* 4. مقاس خاص (600 ج.م) */}
+              {/* 4. مقاس خاص */}
               <div
                 onClick={() => handleToggleAddon('customSize')}
                 className={`p-3.5 rounded-2xl border-2 transition-all flex items-center justify-between gap-3 ${
@@ -672,7 +764,7 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
                     {(sizeType === 'custom' || addons.customSize) && <Check size={12} strokeWidth={3} />}
                   </div>
                   <div>
-                    <div className="text-xs font-black">مقاس خاص</div>
+                    <div className="text-xs font-black">{csCfg.name}</div>
                     <div
                       className={`text-[10px] ${
                         sizeType === 'custom'
@@ -682,7 +774,7 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
                           : 'text-slate-400'
                       }`}
                     >
-                      {sizeType === 'custom' ? 'مفعّل إلزامي للمقاس المخصص' : 'تفصيل بمقاس خاص'}
+                      {sizeType === 'custom' ? 'مفعّل إلزامي للمقاس المخصص' : csCfg.description}
                     </div>
                   </div>
                 </div>
@@ -691,11 +783,11 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
                     sizeType === 'custom' ? 'text-amber-800' : addons.customSize ? 'text-[#FACC15]' : 'text-slate-700'
                   }`}
                 >
-                  +600 ج.م
+                  +{csCfg.price.toLocaleString('en-US')} ج.م
                 </div>
               </div>
 
-              {/* 5. تجليدة سنجل (900 ج.م) - متعارضة مع دبل */}
+              {/* 5. تجليدة سنجل */}
               <div
                 onClick={() => handleToggleAddon('claddingSingle')}
                 className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between gap-3 ${
@@ -715,18 +807,18 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
                     {addons.claddingSingle && <Check size={12} strokeWidth={3} />}
                   </div>
                   <div>
-                    <div className="text-xs font-black">تجليدة سنجل</div>
+                    <div className="text-xs font-black">{csSingleCfg.name}</div>
                     <div className={`text-[10px] ${addons.claddingSingle ? 'text-slate-300' : 'text-slate-400'}`}>
-                      تجليدة مفردة للحلق
+                      {csSingleCfg.description}
                     </div>
                   </div>
                 </div>
                 <div className={`text-xs font-mono font-black shrink-0 ${addons.claddingSingle ? 'text-[#FACC15]' : 'text-slate-700'}`}>
-                  +900 ج.م
+                  +{csSingleCfg.price.toLocaleString('en-US')} ج.م
                 </div>
               </div>
 
-              {/* 6. تجليدة دبل داخلي وخارجي (1800 ج.م) - متعارضة مع سنجل */}
+              {/* 6. تجليدة دبل داخلي وخارجي */}
               <div
                 onClick={() => handleToggleAddon('claddingDouble')}
                 className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between gap-3 ${
@@ -746,14 +838,14 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
                     {addons.claddingDouble && <Check size={12} strokeWidth={3} />}
                   </div>
                   <div>
-                    <div className="text-xs font-black">تجليدة دبل داخلي وخارجي</div>
+                    <div className="text-xs font-black">{csDoubleCfg.name}</div>
                     <div className={`text-[10px] ${addons.claddingDouble ? 'text-slate-300' : 'text-slate-400'}`}>
-                      تجليدة متكاملة للجهتين
+                      {csDoubleCfg.description}
                     </div>
                   </div>
                 </div>
                 <div className={`text-xs font-mono font-black shrink-0 ${addons.claddingDouble ? 'text-[#FACC15]' : 'text-slate-700'}`}>
-                  +1,800 ج.م
+                  +{csDoubleCfg.price.toLocaleString('en-US')} ج.م
                 </div>
               </div>
             </div>
@@ -825,7 +917,8 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
           <div className="flex justify-end pt-2">
             <button
               type="submit"
-              className="w-full sm:w-auto min-h-[48px] px-8 py-3.5 bg-[#0F172A] hover:bg-black text-[#FACC15] font-black text-base rounded-2xl flex items-center justify-center gap-2.5 shadow-lg active:scale-95 transition cursor-pointer"
+              disabled={pricingSyncStatus === 'error'}
+              className="w-full sm:w-auto min-h-[48px] px-8 py-3.5 bg-[#0F172A] hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed text-[#FACC15] font-black text-base rounded-2xl flex items-center justify-center gap-2.5 shadow-lg active:scale-95 transition cursor-pointer"
             >
               {editingId ? <Check size={20} /> : <Plus size={20} />}
               <span>{editingId ? 'حفظ تعديلات الباب' : 'إضافة الباب إلى عرض السعر'}</span>
@@ -866,7 +959,7 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
           <div className="space-y-3">
             <AnimatePresence mode="popLayout">
               {wpcDoors.map((door, index) => {
-                const calculation = calculateWpcDoorPrice(door);
+                const display = getWpcDoorDisplayData(door);
 
                 return (
                   <motion.div
@@ -892,19 +985,19 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
                           </span>
                           <span
                             className={`text-[10px] font-black px-2 py-0.5 rounded-md ${
-                              door.basePackage === 9000
+                              display.isFullPackage
                                 ? 'bg-amber-100 text-amber-900 border border-amber-200'
                                 : 'bg-slate-200 text-slate-800'
                             }`}
                           >
-                            {door.basePackage === 9000 ? 'باقة 9000 (شامل التركيب)' : 'باقة 7000 (توريد فقط)'}
+                            {display.packageName}
                           </span>
                         </div>
 
                         {/* Addons Chips */}
                         <div className="flex flex-wrap gap-1.5 pt-0.5">
-                          {calculation.activeAddonsList.length > 0 ? (
-                            calculation.activeAddonsList.map((addon) => (
+                          {display.activeAddonsList.length > 0 ? (
+                            display.activeAddonsList.map((addon) => (
                               <span
                                 key={addon.key}
                                 className="bg-slate-50 text-slate-600 border border-slate-200 text-[10.5px] font-bold px-2 py-0.5 rounded-md"
@@ -922,10 +1015,10 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
                     <div className="flex items-center justify-between md:justify-end gap-5 w-full md:w-auto pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
                       <div className="text-right">
                         <span className="text-[10px] text-slate-400 font-black block">
-                          {formatCurrency(door.unitPrice)} × {door.quantity}
+                          {formatCurrency(display.unitPrice)} × {door.quantity}
                         </span>
                         <span className="text-lg sm:text-xl font-black font-display text-[#0F172A]" dir="ltr">
-                          {formatCurrency(door.totalPrice)}
+                          {formatCurrency(display.totalPrice)}
                         </span>
                       </div>
 

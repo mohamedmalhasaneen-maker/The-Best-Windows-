@@ -26,9 +26,10 @@ import {
   nextPaintFrame,
 } from '../utils/pdfExportEngine';
 import {
-  ARMORED_DOOR_PRODUCT_NAME,
   ARMORED_INCLUSION_NOTE,
+  ARMORED_EXCLUSION_NOTE,
   ARMORED_PDF_INCLUSION_BANNER,
+  getArmoredDoorProductName,
   calculateArmoredQuoteTotal,
 } from '../constants/armoredConstants';
 import {
@@ -58,6 +59,7 @@ const ArmoredA4PageSheet = React.memo(function ArmoredA4PageSheet({
   quoteNumber,
   armoredTotalPrice,
   totalQuantity,
+  transportInclusionMode,
   logoSrc,
   exportMarker,
 }: {
@@ -68,10 +70,17 @@ const ArmoredA4PageSheet = React.memo(function ArmoredA4PageSheet({
   quoteNumber: string;
   armoredTotalPrice: number;
   totalQuantity: number;
+  transportInclusionMode: 'all' | 'none' | 'partial';
   logoSrc: string;
   exportMarker?: boolean;
 }) {
   const quoteDate = customer.date || new Date().toISOString().split('T')[0];
+  const inclusionSummaryText =
+    transportInclusionMode === 'all'
+      ? ARMORED_PDF_INCLUSION_BANNER
+      : transportInclusionMode === 'none'
+      ? `جميع الأسعار ${ARMORED_EXCLUSION_NOTE}`
+      : 'تُطبق شروط النقل والتركيب حسب الموضح أمام كل بند بالجدول';
 
   const rowHeightPx = page.equalRowHeightPx;
   const fontTitleSizeClass = 'text-[11.5px]';
@@ -106,7 +115,7 @@ const ArmoredA4PageSheet = React.memo(function ArmoredA4PageSheet({
                     {BRAND_NAME}
                   </div>
                   <p className="text-slate-700 font-black text-[12px] mt-0.5">
-                    عرض أسعار أبواب مصفحة · {ARMORED_DOOR_PRODUCT_NAME}
+                    عرض أسعار أبواب مصفحة · {inclusionSummaryText}
                   </p>
                 </div>
               </div>
@@ -200,7 +209,7 @@ const ArmoredA4PageSheet = React.memo(function ArmoredA4PageSheet({
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-[#FACC15]" />
                 <span className="font-display font-black text-xs text-[#FACC15]">
-                  عرض أسعار أبواب مصفحة — {ARMORED_DOOR_PRODUCT_NAME}
+                  عرض أسعار أبواب مصفحة — جدول التفاصيل والمواصفات
                 </span>
               </div>
               <span className="text-[9.5px] text-slate-300 font-bold">
@@ -213,8 +222,8 @@ const ArmoredA4PageSheet = React.memo(function ArmoredA4PageSheet({
                 <tr className="bg-slate-100 text-slate-800 border-b border-slate-300 font-black text-[9.5px] h-[28px]">
                   <th className="px-1 text-center w-[34px] border-l border-slate-200">م</th>
                   <th className="px-2 w-[250px] border-l border-slate-200">المنتج والمواصفات والبيان</th>
-                  <th className="px-2 text-center border-l border-slate-200 w-[135px]">نوع التصنيع</th>
-                  <th className="px-2 text-center border-l border-slate-200 w-[130px]">سعر الباب (شامل النقل والتركيب)</th>
+                  <th className="px-2 text-center border-l border-slate-200 w-[135px]">نوع الباب</th>
+                  <th className="px-2 text-center border-l border-slate-200 w-[130px]">سعر الباب</th>
                   <th className="px-1 text-center border-l border-slate-200 w-[55px]">الكمية</th>
                   <th className="px-2 text-left w-[115px]">الإجمالي</th>
                 </tr>
@@ -234,7 +243,7 @@ const ArmoredA4PageSheet = React.memo(function ArmoredA4PageSheet({
                         {door.title}
                       </div>
                       <div className="text-[8.5px] font-bold text-slate-500 mt-0.5">
-                        {door.productName || ARMORED_DOOR_PRODUCT_NAME}
+                        {door.productName || getArmoredDoorProductName(door.manufactureType)}
                         {door.notes ? ` · ${door.notes}` : ''}
                       </div>
                     </td>
@@ -243,6 +252,8 @@ const ArmoredA4PageSheet = React.memo(function ArmoredA4PageSheet({
                         className={`text-[9.5px] font-black px-2 py-0.5 rounded inline-block ${
                           door.manufactureType === 'turkish_turkish'
                             ? 'bg-amber-50 text-amber-900 border border-amber-200'
+                            : door.manufactureType === 'egyptian_single'
+                            ? 'bg-sky-50 text-sky-900 border border-sky-200'
                             : 'bg-slate-100 text-slate-800 border border-slate-200'
                         }`}
                       >
@@ -253,8 +264,16 @@ const ArmoredA4PageSheet = React.memo(function ArmoredA4PageSheet({
                       <div className="font-mono font-bold text-slate-900" dir="ltr">
                         {formatCurrency(door.unitPrice)}
                       </div>
-                      <div className="text-[8px] font-black text-emerald-700">
-                        {ARMORED_INCLUSION_NOTE}
+                      <div
+                        className={`text-[8px] font-black ${
+                          door.includesTransportAndInstall !== false
+                            ? 'text-emerald-700'
+                            : 'text-amber-700'
+                        }`}
+                      >
+                        {door.includesTransportAndInstall !== false
+                          ? ARMORED_INCLUSION_NOTE
+                          : ARMORED_EXCLUSION_NOTE}
                       </div>
                     </td>
                     <td className="px-1 text-center font-mono font-black text-slate-900 border-l border-slate-100 align-middle">
@@ -300,15 +319,38 @@ const ArmoredA4PageSheet = React.memo(function ArmoredA4PageSheet({
           </div>
         )}
 
-        {/* 2. Prominent Inclusion Banner ("جميع الأسعار شاملة النقل والتركيب") */}
+        {/* 2. Prominent Inclusion Banner */}
         {page.showTotals && (
-          <div className="bg-emerald-50 border-2 border-emerald-300 rounded-xl px-4 py-2.5 flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-2 text-emerald-950 font-black text-[12px]">
-              <Truck size={16} className="text-emerald-700 shrink-0" />
-              <span>{ARMORED_PDF_INCLUSION_BANNER}</span>
+          <div
+            className={`rounded-xl px-4 py-2.5 flex items-center justify-between shrink-0 border-2 ${
+              transportInclusionMode === 'all'
+                ? 'bg-emerald-50 border-emerald-300'
+                : 'bg-amber-50 border-amber-300'
+            }`}
+          >
+            <div
+              className={`flex items-center gap-2 font-black text-[12px] ${
+                transportInclusionMode === 'all' ? 'text-emerald-950' : 'text-amber-950'
+              }`}
+            >
+              <Truck
+                size={16}
+                className={
+                  transportInclusionMode === 'all'
+                    ? 'text-emerald-700 shrink-0'
+                    : 'text-amber-700 shrink-0'
+                }
+              />
+              <span>{inclusionSummaryText}</span>
             </div>
-            <span className="text-[10.5px] font-black text-emerald-900 bg-white border border-emerald-200 px-2.5 py-0.5 rounded-md">
-              {ARMORED_DOOR_PRODUCT_NAME}
+            <span
+              className={`text-[10.5px] font-black bg-white px-2.5 py-0.5 rounded-md border ${
+                transportInclusionMode === 'all'
+                  ? 'text-emerald-900 border-emerald-200'
+                  : 'text-amber-900 border-amber-200'
+              }`}
+            >
+              أبواب مصفحة معتمدة
             </span>
           </div>
         )}
@@ -321,14 +363,25 @@ const ArmoredA4PageSheet = React.memo(function ArmoredA4PageSheet({
                 <ShieldCheck size={14} className="text-[#F59E0B]" />
                 <span>مواصفات وشروط تسليم الأبواب المصفحة:</span>
               </h5>
-              <span className="text-[9.5px] font-black text-emerald-900 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-md">
-                {ARMORED_PDF_INCLUSION_BANNER}
+              <span
+                className={`text-[9.5px] font-black px-2 py-0.5 rounded-md border ${
+                  transportInclusionMode === 'all'
+                    ? 'text-emerald-900 bg-emerald-100 border-emerald-300'
+                    : 'text-amber-900 bg-amber-100 border-amber-300'
+                }`}
+              >
+                {inclusionSummaryText}
               </span>
             </div>
 
             <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[9.5px] text-slate-700 font-bold">
-              <p>✓ المواصفة القياسية: {ARMORED_DOOR_PRODUCT_NAME}.</p>
-              <p>✓ {ARMORED_PDF_INCLUSION_BANNER} بدون أي مصاريف إضافية.</p>
+              <p>✓ المواصفات الفنية: حسب النوع الموضح في كل بند أعلاه.</p>
+              <p>
+                ✓{' '}
+                {transportInclusionMode === 'all'
+                  ? `${ARMORED_PDF_INCLUSION_BANNER} بدون أي مصاريف إضافية.`
+                  : `${inclusionSummaryText}.`}
+              </p>
               <p>✓ فحص الكوالين والمفصلات وضمان ضبط التركيب عند الاستلام.</p>
               <p>✓ الشروط المالية: 50% دفعة تعاقد و50% عند التوريد والتركيب.</p>
             </div>
@@ -477,6 +530,15 @@ export default function ArmoredDetailedQuoteView({
 
   const totalQuantity = React.useMemo(() => {
     return (armoredDoors || []).reduce((sum, d) => sum + (d.quantity || 1), 0);
+  }, [armoredDoors]);
+
+  const transportInclusionMode = React.useMemo<'all' | 'none' | 'partial'>(() => {
+    const list = armoredDoors || [];
+    if (list.length === 0) return 'all';
+    const includedCount = list.filter((d) => d.includesTransportAndInstall !== false).length;
+    if (includedCount === list.length) return 'all';
+    if (includedCount === 0) return 'none';
+    return 'partial';
   }, [armoredDoors]);
 
   const pages = React.useMemo(() => {
@@ -666,6 +728,7 @@ export default function ArmoredDetailedQuoteView({
               quoteNumber={quoteNumber}
               armoredTotalPrice={armoredTotalPrice}
               totalQuantity={totalQuantity}
+              transportInclusionMode={transportInclusionMode}
               logoSrc={resolvedLogoSrc}
             />
           </div>
@@ -709,6 +772,7 @@ export default function ArmoredDetailedQuoteView({
               quoteNumber={quoteNumber}
               armoredTotalPrice={armoredTotalPrice}
               totalQuantity={totalQuantity}
+              transportInclusionMode={transportInclusionMode}
               logoSrc={resolvedLogoSrc}
             />
           </div>
@@ -739,6 +803,7 @@ export default function ArmoredDetailedQuoteView({
                 quoteNumber={quoteNumber}
                 armoredTotalPrice={armoredTotalPrice}
                 totalQuantity={totalQuantity}
+                transportInclusionMode={transportInclusionMode}
                 logoSrc={resolvedLogoSrc}
                 exportMarker
               />

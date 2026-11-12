@@ -12,20 +12,33 @@ import {
   Truck,
   Save,
   Lock,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArmoredDoorItem, ArmoredDoorManufactureType } from '../types';
+import {
+  ArmoredDoorItem,
+  ArmoredDoorManufactureType,
+  ArmoredDoorTypeConfig,
+} from '../types';
 import {
   ARMORED_DOOR_PRODUCT_NAME,
+  ARMORED_DOOR_EGYPTIAN_SINGLE_NAME,
   ARMORED_INCLUSION_NOTE,
+  ARMORED_EXCLUSION_NOTE,
   ARMORED_PDF_INCLUSION_BANNER,
-  ARMORED_DOOR_TYPE_LIST,
+  DEFAULT_ARMORED_DOOR_TYPES,
+  getArmoredDoorProductName,
   calculateArmoredDoorPrice,
   calculateArmoredQuoteTotal,
 } from '../constants/armoredConstants';
 
 interface ArmoredDoorsSectionProps {
   armoredDoors: ArmoredDoorItem[];
+  armoredTypes?: ArmoredDoorTypeConfig[];
+  pricingSyncStatus?: 'loading' | 'synced' | 'error';
+  pricingErrorText?: string | null;
+  onRetryLoadPricing?: () => void;
   onAddDoor: (door: ArmoredDoorItem) => void;
   onUpdateDoor: (id: number, door: Partial<ArmoredDoorItem>) => void;
   onRemoveDoor: (id: number) => void;
@@ -37,6 +50,10 @@ interface ArmoredDoorsSectionProps {
 
 export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
   armoredDoors,
+  armoredTypes = DEFAULT_ARMORED_DOOR_TYPES,
+  pricingSyncStatus = 'synced',
+  pricingErrorText = null,
+  onRetryLoadPricing,
   onAddDoor,
   onUpdateDoor,
   onRemoveDoor,
@@ -45,26 +62,50 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
   onSaveQuoteAuto,
   onNavigateNext,
 }) => {
+  const allTypes =
+    Array.isArray(armoredTypes) && armoredTypes.length > 0
+      ? armoredTypes
+      : DEFAULT_ARMORED_DOOR_TYPES;
+
+  const activeTypes = allTypes.filter((t) => t.isActive !== false);
+  const selectableTypes = activeTypes.length > 0 ? activeTypes : allTypes;
+
   const [editingId, setEditingId] = useState<number | null>(null);
   const [title, setTitle] = useState('');
-  const [manufactureType, setManufactureType] =
-    useState<ArmoredDoorManufactureType>('turkish_turkish');
+  const [manufactureType, setManufactureType] = useState<ArmoredDoorManufactureType>(
+    () => selectableTypes[0]?.id || 'turkish_turkish'
+  );
   const [quantity, setQuantity] = useState<number>(1);
   const [notes, setNotes] = useState('');
   const [justSavedQuote, setJustSavedQuote] = useState(false);
 
+  // Ensure selected manufactureType stays valid if active types change while creating a new item
+  const effectiveManufactureType =
+    editingId !== null
+      ? manufactureType
+      : selectableTypes.some((t) => t.id === manufactureType)
+      ? manufactureType
+      : selectableTypes[0]?.id || manufactureType;
+
   const resetForm = () => {
     setEditingId(null);
     setTitle('');
-    setManufactureType('turkish_turkish');
+    setManufactureType(selectableTypes[0]?.id || 'turkish_turkish');
     setQuantity(1);
     setNotes('');
   };
 
   const handleStartEdit = (door: ArmoredDoorItem) => {
     setEditingId(door.id);
-    setTitle(door.title === ARMORED_DOOR_PRODUCT_NAME ? '' : door.title || '');
-    setManufactureType(door.manufactureType || 'turkish_turkish');
+    const defaultSpecName = getArmoredDoorProductName(door.manufactureType, allTypes);
+    setTitle(
+      door.title === ARMORED_DOOR_PRODUCT_NAME ||
+        door.title === ARMORED_DOOR_EGYPTIAN_SINGLE_NAME ||
+        door.title === defaultSpecName
+        ? ''
+        : door.title || ''
+    );
+    setManufactureType(door.manufactureType || selectableTypes[0]?.id || 'turkish_turkish');
     setQuantity(door.quantity || 1);
     setNotes(door.notes || '');
 
@@ -74,13 +115,20 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
     }
   };
 
-  const currentCalculation = calculateArmoredDoorPrice(manufactureType, quantity);
+  const currentCalculation = calculateArmoredDoorPrice(
+    effectiveManufactureType,
+    quantity,
+    allTypes
+  );
 
   const handleSubmitDoor = (e: React.FormEvent) => {
     e.preventDefault();
+    if (pricingSyncStatus === 'error') {
+      return;
+    }
 
     const safeQty = Math.max(1, Math.floor(Number(quantity) || 1));
-    const calc = calculateArmoredDoorPrice(manufactureType, safeQty);
+    const calc = calculateArmoredDoorPrice(effectiveManufactureType, safeQty, allTypes);
     const trimmedTitle = title.trim();
     const defaultTitle = trimmedTitle
       ? trimmedTitle
@@ -89,12 +137,13 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
     const doorData: ArmoredDoorItem = {
       id: editingId || Date.now(),
       title: defaultTitle,
-      productName: ARMORED_DOOR_PRODUCT_NAME,
+      productName: calc.productName,
       manufactureType: calc.manufactureType,
       manufactureLabel: calc.manufactureLabel,
       unitPrice: calc.unitPrice,
       quantity: calc.quantity,
       totalPrice: calc.totalPrice,
+      includesTransportAndInstall: calc.includesTransportAndInstall,
       notes: notes.trim() || undefined,
     };
 
@@ -118,6 +167,35 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
 
   return (
     <div className="w-full space-y-8" dir="rtl">
+      {/* DB Error Alert (Never silently fall back if database pricing failed to load) */}
+      {pricingSyncStatus === 'error' && (
+        <div
+          role="alert"
+          className="bg-rose-50 border-2 border-rose-300 text-rose-900 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm"
+        >
+          <div className="flex items-start gap-3">
+            <AlertCircle size={20} className="text-rose-600 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="font-black text-sm">تعذر تحميل أسعار الأبواب المعتمدة من قاعدة البيانات</h4>
+              <p className="text-xs font-bold text-rose-700 mt-0.5">
+                {pricingErrorText ||
+                  'فشل الاتصال بقاعدة البيانات لتحميل أحدث أسعار الأبواب المصفحة. تم إيقاف إضافة بنود جديدة مؤقتاً لضمان عدم اعتماد أسعار قديمة.'}
+              </p>
+            </div>
+          </div>
+          {onRetryLoadPricing && (
+            <button
+              type="button"
+              onClick={onRetryLoadPricing}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shrink-0 cursor-pointer transition"
+            >
+              <RefreshCw size={14} />
+              <span>إعادة المحاولة</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* 1. Header Banner */}
       <motion.div
         initial={{ opacity: 0, y: 10 }}
@@ -135,11 +213,15 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
             </h2>
             <p className="text-slate-700 font-black text-sm sm:text-base flex flex-wrap items-center gap-2">
               <Lock size={16} className="text-[#F59E0B] shrink-0" />
-              <span>{ARMORED_DOOR_PRODUCT_NAME}</span>
+              <span>{currentCalculation.productName}</span>
             </p>
             <div className="inline-flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-800 px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-black">
               <Truck size={16} className="text-emerald-600 shrink-0" />
-              <span>{ARMORED_PDF_INCLUSION_BANNER}</span>
+              <span>
+                {currentCalculation.includesTransportAndInstall
+                  ? ARMORED_PDF_INCLUSION_BANNER
+                  : ARMORED_EXCLUSION_NOTE}
+              </span>
             </div>
           </div>
 
@@ -175,7 +257,10 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
                 {editingId ? 'تعديل بند باب مصفح' : 'إضافة باب مصفح جديد للعرض'}
               </h3>
               <p className="text-xs text-slate-500 font-bold truncate">
-                {ARMORED_DOOR_PRODUCT_NAME} — {ARMORED_INCLUSION_NOTE}
+                {currentCalculation.productName} —{' '}
+                {currentCalculation.includesTransportAndInstall
+                  ? ARMORED_INCLUSION_NOTE
+                  : ARMORED_EXCLUSION_NOTE}
               </p>
             </div>
           </div>
@@ -192,17 +277,29 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
         </div>
 
         <form onSubmit={handleSubmitDoor} className="space-y-6">
-          {/* Product Fixed Specification Display */}
+          {/* Product Specification Display for Selected Type */}
           <div className="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="space-y-0.5">
-              <span className="text-[11px] font-black text-slate-400 block">اسم ومواصفات المنتج المعتمد</span>
+              <span className="text-[11px] font-black text-slate-400 block">
+                المواصفات المعتمدة للنوع المختار ({currentCalculation.manufactureLabel})
+              </span>
               <span className="text-sm sm:text-base font-black text-[#0F172A]">
-                {ARMORED_DOOR_PRODUCT_NAME}
+                {currentCalculation.productName}
               </span>
             </div>
-            <span className="inline-flex items-center gap-1.5 bg-emerald-100 text-emerald-900 border border-emerald-300 px-3 py-1.5 rounded-xl text-xs font-black shrink-0 self-start sm:self-center">
+            <span
+              className={`inline-flex items-center gap-1.5 border px-3 py-1.5 rounded-xl text-xs font-black shrink-0 self-start sm:self-center ${
+                currentCalculation.includesTransportAndInstall
+                  ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                  : 'bg-amber-100 text-amber-900 border-amber-300'
+              }`}
+            >
               <Check size={14} strokeWidth={3} />
-              <span>{ARMORED_INCLUSION_NOTE}</span>
+              <span>
+                {currentCalculation.includesTransportAndInstall
+                  ? ARMORED_INCLUSION_NOTE
+                  : ARMORED_EXCLUSION_NOTE}
+              </span>
             </span>
           </div>
 
@@ -210,25 +307,26 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
           <div className="space-y-3">
             <label className="block text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
               <ShieldCheck size={16} className="text-[#0F172A]" />
-              <span>1. اختيار نوع التصنيع والتقفيل (إلزامي — اختيار واحد فقط):</span>
+              <span>1. اختيار نوع الباب والمواصفات (إلزامي — اختيار واحد فقط):</span>
             </label>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {ARMORED_DOOR_TYPE_LIST.map((option) => {
-                const isSelected = manufactureType === option.id;
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {selectableTypes.map((option) => {
+                const isSelected = effectiveManufactureType === option.id;
+                const inc = option.includesTransportAndInstall !== false;
                 return (
                   <button
                     key={option.id}
                     type="button"
                     onClick={() => setManufactureType(option.id)}
                     aria-pressed={isSelected}
-                    className={`p-4 sm:p-5 rounded-2xl border-2 transition-all cursor-pointer relative text-right w-full ${
+                    className={`p-4 sm:p-5 rounded-2xl border-2 transition-all cursor-pointer relative text-right w-full flex flex-col justify-between gap-3 ${
                       isSelected
                         ? 'border-[#0F172A] bg-[#0F172A] text-white shadow-lg ring-2 ring-[#FACC15]'
                         : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-800'
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start justify-between gap-3 w-full">
                       <div className="flex items-start gap-3 min-w-0">
                         <div
                           className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 mt-0.5 ${
@@ -256,31 +354,41 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
                           </div>
                           <p
                             className={`text-xs mt-1.5 font-bold ${
-                              isSelected ? 'text-slate-300' : 'text-slate-600'
+                              isSelected ? 'text-slate-200' : 'text-slate-700'
                             }`}
                           >
-                            {option.description}
+                            {option.specs}
                           </p>
                         </div>
                       </div>
+                    </div>
 
-                      <div className="text-left shrink-0">
-                        <div
-                          className={`font-black font-mono text-lg sm:text-xl ${
-                            isSelected ? 'text-[#FACC15]' : 'text-[#0F172A]'
-                          }`}
-                          dir="ltr"
-                        >
-                          {formatCurrency(option.price)}
-                        </div>
-                        <div
-                          className={`text-[10px] font-black mt-0.5 ${
-                            isSelected ? 'text-emerald-300' : 'text-emerald-700'
-                          }`}
-                        >
-                          شامل النقل والتركيب
-                        </div>
-                      </div>
+                    <div
+                      className={`pt-2.5 border-t flex items-center justify-between gap-2 w-full ${
+                        isSelected ? 'border-slate-700' : 'border-slate-200'
+                      }`}
+                    >
+                      <span
+                        className={`text-[10px] font-black ${
+                          inc
+                            ? isSelected
+                              ? 'text-emerald-300'
+                              : 'text-emerald-700'
+                            : isSelected
+                            ? 'text-amber-300'
+                            : 'text-amber-700'
+                        }`}
+                      >
+                        {inc ? ARMORED_INCLUSION_NOTE : ARMORED_EXCLUSION_NOTE}
+                      </span>
+                      <span
+                        className={`font-black font-mono text-lg sm:text-xl ${
+                          isSelected ? 'text-[#FACC15]' : 'text-[#0F172A]'
+                        }`}
+                        dir="ltr"
+                      >
+                        {formatCurrency(option.price)}
+                      </span>
                     </div>
                   </button>
                 );
@@ -363,7 +471,9 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
                   {formatCurrency(currentCalculation.unitPrice)}
                 </span>
                 <span className="text-[10px] text-emerald-700 font-black block">
-                  {ARMORED_INCLUSION_NOTE}
+                  {currentCalculation.includesTransportAndInstall
+                    ? ARMORED_INCLUSION_NOTE
+                    : ARMORED_EXCLUSION_NOTE}
                 </span>
               </div>
 
@@ -383,7 +493,8 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
           <div className="flex justify-end pt-2">
             <button
               type="submit"
-              className="w-full sm:w-auto min-h-[48px] px-8 py-3.5 bg-[#0F172A] hover:bg-black text-[#FACC15] font-black text-base rounded-2xl flex items-center justify-center gap-2.5 shadow-lg active:scale-95 transition cursor-pointer"
+              disabled={pricingSyncStatus === 'error'}
+              className="w-full sm:w-auto min-h-[48px] px-8 py-3.5 bg-[#0F172A] hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed text-[#FACC15] font-black text-base rounded-2xl flex items-center justify-center gap-2.5 shadow-lg active:scale-95 transition cursor-pointer"
             >
               {editingId ? <Check size={20} /> : <Plus size={20} />}
               <span>{editingId ? 'حفظ تعديلات الباب المصفح' : 'إضافة الباب المصفح إلى العرض'}</span>
@@ -420,7 +531,7 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
             </div>
             <h4 className="text-base font-black text-slate-700">لم تقم بإضافة أي أبواب مصفحة بعد</h4>
             <p className="text-xs text-slate-500 font-bold max-w-md mx-auto">
-              اختر نوع التصنيع المطلوب (تركي تقفيل تركي أو تركي تقفيل مصري) والكمية من النموذج أعلاه لإضافتها إلى عرض السعر.
+              اختر نوع الباب المطلوب (تركي تقفيل تركي، تركي تقفيل مصري، أو مصري كالون واحد) والكمية من النموذج أعلاه لإضافتها إلى عرض السعر.
             </p>
           </div>
         ) : (
@@ -449,18 +560,28 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
                           className={`text-[11px] font-black px-2.5 py-0.5 rounded-lg border ${
                             door.manufactureType === 'turkish_turkish'
                               ? 'bg-amber-100 text-amber-900 border-amber-200'
+                              : door.manufactureType === 'egyptian_single'
+                              ? 'bg-sky-100 text-sky-900 border-sky-200'
                               : 'bg-slate-100 text-slate-800 border-slate-200'
                           }`}
                         >
                           {door.manufactureLabel}
                         </span>
-                        <span className="text-[10px] font-black bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-md">
-                          {ARMORED_INCLUSION_NOTE}
+                        <span
+                          className={`text-[10px] font-black border px-2 py-0.5 rounded-md ${
+                            door.includesTransportAndInstall !== false
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                              : 'bg-amber-50 text-amber-800 border-amber-200'
+                          }`}
+                        >
+                          {door.includesTransportAndInstall !== false
+                            ? ARMORED_INCLUSION_NOTE
+                            : ARMORED_EXCLUSION_NOTE}
                         </span>
                       </div>
 
                       <p className="text-xs font-bold text-slate-500">
-                        {door.productName || ARMORED_DOOR_PRODUCT_NAME}
+                        {door.productName || getArmoredDoorProductName(door.manufactureType, allTypes)}
                       </p>
 
                       {door.notes && (
@@ -565,7 +686,7 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
       <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
           <ArrowRight size={14} className="text-[#F59E0B]" />
-          <span>{ARMORED_DOOR_PRODUCT_NAME} — {ARMORED_PDF_INCLUSION_BANNER}</span>
+          <span>{currentCalculation.productName} — {ARMORED_PDF_INCLUSION_BANNER}</span>
         </div>
 
         <button

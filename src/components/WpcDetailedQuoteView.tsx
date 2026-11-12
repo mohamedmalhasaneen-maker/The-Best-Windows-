@@ -21,7 +21,7 @@ import {
   warmUpPdfAssets,
   nextPaintFrame,
 } from '../utils/pdfExportEngine';
-import { calculateWpcDoorPrice, formatWpcDoorSize } from '../constants/wpcConstants';
+import { formatWpcDoorSize, getWpcDoorDisplayData } from '../constants/wpcConstants';
 
 interface WpcDetailedQuoteViewProps {
   customer: CustomerInfo;
@@ -123,7 +123,7 @@ function paginateWpcQuoteIntoPages(
           door,
           serialNumber: currentDoorsStartSerial + idx,
           formattedSize: formatWpcDoorSize(door),
-          activeAddonsList: calculateWpcDoorPrice(door).activeAddonsList,
+          activeAddonsList: getWpcDoorDisplayData(door).activeAddonsList,
         })),
         showTotals: true,
         showTermsAndSignatures: true,
@@ -168,7 +168,7 @@ function paginateWpcQuoteIntoPages(
         door,
         serialNumber: currentDoorsStartSerial + idx,
         formattedSize: formatWpcDoorSize(door),
-        activeAddonsList: calculateWpcDoorPrice(door).activeAddonsList,
+        activeAddonsList: getWpcDoorDisplayData(door).activeAddonsList,
       })),
       showTotals: false,
       showTermsAndSignatures: false,
@@ -365,7 +365,9 @@ const WpcA4PageSheet = React.memo(function WpcA4PageSheet({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 bg-white">
-                {page.wpcDoors.map(({ door, serialNumber, formattedSize, activeAddonsList }) => (
+                {page.wpcDoors.map(({ door, serialNumber, formattedSize, activeAddonsList }) => {
+                  const display = getWpcDoorDisplayData(door);
+                  return (
                   <tr
                     key={door.id}
                     style={{ height: `${rowHeightPx}px` }}
@@ -388,8 +390,8 @@ const WpcA4PageSheet = React.memo(function WpcA4PageSheet({
                       )}
                     </td>
                     <td className="px-1.5 border-l border-slate-100 align-middle">
-                      <span className={`text-[8.5px] font-bold px-1.5 py-0.5 rounded inline-block ${door.basePackage === 9000 ? 'bg-amber-50 text-amber-900 border border-amber-200' : 'bg-slate-100 text-slate-700'}`}>
-                        {door.basePackage === 9000 ? 'باقة 9000 (تركيب)' : 'باقة 7000 (توريد)'}
+                      <span className={`text-[8.5px] font-bold px-1.5 py-0.5 rounded inline-block ${display.isFullPackage ? 'bg-amber-50 text-amber-900 border border-amber-200' : 'bg-slate-100 text-slate-700'}`}>
+                        {display.packageName}
                       </span>
                     </td>
                     <td className="px-1.5 border-l border-slate-100 align-middle">
@@ -409,13 +411,14 @@ const WpcA4PageSheet = React.memo(function WpcA4PageSheet({
                       {door.quantity}
                     </td>
                     <td className="px-1.5 text-center font-mono font-bold text-slate-800 border-l border-slate-100 align-middle" dir="ltr">
-                      {formatCurrency(door.unitPrice)}
+                      {formatCurrency(display.unitPrice)}
                     </td>
                     <td className="px-2 text-left font-mono font-black text-[#0F172A] align-middle" dir="ltr">
-                      {formatCurrency(door.totalPrice)}
+                      {formatCurrency(display.totalPrice)}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -511,7 +514,7 @@ const WpcA4PageSheet = React.memo(function WpcA4PageSheet({
               <p>✓ الخامات معالجة 100% ضد امتصاص المياه، الرطوبة، الفطريات، وحشرات الخشب.</p>
               <p>✓ المقاسات نهائية بعد المعاينة الهندسية وتحديد اتجاه الفتح بالموقع.</p>
               <p>✓ الشروط المالية: 50% مقدم تعاقد عند الاعتماد، و50% عند الاستلام النهائي.</p>
-              <p>✓ الأسعار شاملة كافة الملحقات المعروضة وفقاً للباقتين المعتمدتين 9000 / 7000 ج.م.</p>
+              <p>✓ الأسعار شاملة كافة الملحقات والمواصفات الموضحة لكل باقة في عرض السعر.</p>
             </div>
 
             {notes && (

@@ -25,7 +25,14 @@ import {
   Profile,
   Addon,
   PricingConfig,
+  WpcDoorPackageConfig,
+  WpcAddonConfig,
+  WpcPricingConfig,
+  ArmoredDoorTypeConfig,
+  DoorsPricingConfig,
 } from './types';
+import { DEFAULT_WPC_PRICING_CONFIG } from './constants/wpcConstants';
+import { DEFAULT_ARMORED_DOOR_TYPES } from './constants/armoredConstants';
 
 // Initialize Firebase App safely
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
@@ -70,6 +77,7 @@ const QUOTES_COLLECTION = 'quotes';
 const CUSTOMERS_COLLECTION = 'customers';
 const SETTINGS_COLLECTION = 'settings';
 const PRICING_DOC_ID = 'pricing';
+const DOORS_PRICING_DOC_ID = 'doors_pricing';
 const ADMIN_GATE_COLLECTION = 'admin_gate';
 
 export enum OperationType {
@@ -773,6 +781,446 @@ export async function savePricingToCloud(
       throw new Error(msg);
     }
     throw new Error('تعذر حفظ الأسعار في قاعدة البيانات. يرجى المحاولة مرة أخرى.');
+  }
+}
+
+export function sanitizeAndValidateDoorsPricing(raw: {
+  wpc: WpcPricingConfig;
+  armored: ArmoredDoorTypeConfig[];
+}): {
+  wpc: WpcPricingConfig;
+  armored: ArmoredDoorTypeConfig[];
+} {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('بيانات أسعار الأبواب غير صالحة.');
+  }
+
+  // Validate WPC pricing
+  const rawWpc = raw.wpc;
+  if (!rawWpc || typeof rawWpc !== 'object' || !Array.isArray(rawWpc.packages)) {
+    throw new Error('بيانات باقات وأنواع أبواب WPC غير صالحة.');
+  }
+  if (rawWpc.packages.length === 0) {
+    throw new Error('يجب وجود نوع أو باقة واحدة على الأقل لأبواب WPC قبل الحفظ.');
+  }
+
+  const seenPkgIds = new Set<string>();
+  const cleanPackages: WpcDoorPackageConfig[] = [];
+  for (const pkg of rawWpc.packages) {
+    const id = String(pkg?.id || '').trim();
+    const name = String(pkg?.name || '').trim();
+    const description = String(pkg?.description || '').trim();
+    const badge = String(pkg?.badge || '').trim();
+    const numericPrice = Number(pkg?.price);
+
+    if (!id) {
+      throw new Error('يوجد نوع باب WPC بدون معرّف صالح.');
+    }
+    if (seenPkgIds.has(id)) {
+      throw new Error(`معرّف نوع باب WPC "${id}" مكرر.`);
+    }
+    seenPkgIds.add(id);
+
+    if (!name) {
+      throw new Error('يرجى التأكد من عدم ترك اسم أي نوع من أبواب WPC فارغاً.');
+    }
+    if (!Number.isFinite(numericPrice) || numericPrice < 0) {
+      throw new Error(`سعر باب WPC "${name}" غير صالح. يجب أن يكون رقماً موجباً أو صفراً.`);
+    }
+
+    cleanPackages.push({
+      id,
+      name,
+      description,
+      badge: badge || (pkg?.hasAccessoriesIncluded ? 'شامل كامل' : 'مخصص'),
+      price: numericPrice,
+      hasAccessoriesIncluded: Boolean(pkg?.hasAccessoriesIncluded),
+      isActive: pkg?.isActive !== false,
+    });
+  }
+
+  if (!cleanPackages.some((p) => p.isActive)) {
+    throw new Error('يجب إبقاء نوع واحد نشط على الأقل في قسم أبواب WPC.');
+  }
+
+  const cleanAddons: Record<string, WpcAddonConfig> = {};
+  const cleanAddonOrder: string[] = [];
+  const defaultAddons = DEFAULT_WPC_PRICING_CONFIG.addons;
+  const rawAddons = rawWpc.addons && typeof rawWpc.addons === 'object' ? rawWpc.addons : {};
+  const sourceOrder =
+    Array.isArray(rawWpc.addonOrder) && rawWpc.addonOrder.length > 0
+      ? rawWpc.addonOrder
+      : DEFAULT_WPC_PRICING_CONFIG.addonOrder;
+
+  const keysToProcess = Array.from(
+    new Set([...sourceOrder, ...Object.keys(defaultAddons), ...Object.keys(rawAddons)])
+  );
+
+  for (const key of keysToProcess) {
+    const candidate = rawAddons[key] || defaultAddons[key];
+    if (!candidate) continue;
+    const name = String(candidate.name || '').trim();
+    const description = String(candidate.description || '').trim();
+    const numericPrice = Number(candidate.price);
+
+    if (!name) {
+      throw new Error(`يرجى عدم ترك اسم إضافة WPC (${key}) فارغاً.`);
+    }
+    if (!Number.isFinite(numericPrice) || numericPrice < 0) {
+      throw new Error(`سعر إضافة "${name}" غير صالح. يجب أن يكون رقماً موجباً أو صفراً.`);
+    }
+
+    cleanAddons[key] = {
+      key,
+      name,
+      description,
+      price: numericPrice,
+    };
+    cleanAddonOrder.push(key);
+  }
+
+  // Validate Armored Door types
+  if (!Array.isArray(raw.armored) || raw.armored.length === 0) {
+    throw new Error('يجب وجود نوع واحد على الأقل للأبواب المصفحة قبل الحفظ.');
+  }
+
+  const seenArmoredIds = new Set<string>();
+  const cleanArmored: ArmoredDoorTypeConfig[] = [];
+
+  for (const item of raw.armored) {
+    const id = String(item?.id || '').trim();
+    const label = String(item?.label || '').trim();
+    const specs = String(item?.specs || '').trim();
+    const productName = String(item?.productName || specs || label).trim();
+    const badge = String(item?.badge || label).trim();
+    const includesTransportAndInstall = item?.includesTransportAndInstall !== false;
+    const isActive = item?.isActive !== false;
+    const numericPrice = Number(item?.price);
+
+    if (!id) {
+      throw new Error('يوجد نوع باب مصفح بدون معرّف صالح.');
+    }
+    if (seenArmoredIds.has(id)) {
+      throw new Error(`معرّف نوع الباب المصفح "${id}" مكرر.`);
+    }
+    seenArmoredIds.add(id);
+
+    if (!label) {
+      throw new Error('يرجى التأكد من عدم ترك اسم أي نوع من الأبواب المصفحة فارغاً.');
+    }
+    if (!specs) {
+      throw new Error(`يرجى إدخال مواصفات النوع "${label}" قبل الحفظ.`);
+    }
+    if (!Number.isFinite(numericPrice) || numericPrice < 0) {
+      throw new Error(`سعر الباب المصفح "${label}" غير صالح. يجب أن يكون رقماً موجباً أو صفراً.`);
+    }
+
+    const inclusionSuffix = includesTransportAndInstall
+      ? 'السعر شامل النقل والتركيب'
+      : 'السعر غير شامل النقل والتركيب';
+
+    cleanArmored.push({
+      id,
+      label,
+      productName,
+      specs,
+      price: numericPrice,
+      badge: badge || 'مواصفات معتمدة',
+      description: `${specs} · ${inclusionSuffix}`,
+      includesTransportAndInstall,
+      isActive,
+    });
+  }
+
+  if (!cleanArmored.some((t) => t.isActive)) {
+    throw new Error('يجب إبقاء نوع واحد نشط على الأقل في قسم الأبواب المصفحة.');
+  }
+
+  return {
+    wpc: {
+      packages: cleanPackages,
+      addons: cleanAddons,
+      addonOrder: cleanAddonOrder,
+    },
+    armored: cleanArmored,
+  };
+}
+
+function reconstructDoorsPricing(data: Record<string, any>): DoorsPricingConfig {
+  const rawWpc = data.wpc && typeof data.wpc === 'object' ? data.wpc : {};
+  const rawPackages = Array.isArray(rawWpc.packages)
+    ? rawWpc.packages
+    : DEFAULT_WPC_PRICING_CONFIG.packages;
+
+  const packages: WpcDoorPackageConfig[] = rawPackages
+    .filter((p: any) => p && typeof p === 'object' && String(p.name || '').trim())
+    .map((p: any, idx: number) => ({
+      id: String(p.id || `wpc_pkg_${idx + 1}`),
+      name: String(p.name),
+      description: String(p.description || ''),
+      badge: String(p.badge || ''),
+      price: Number.isFinite(Number(p.price)) ? Number(p.price) : 0,
+      hasAccessoriesIncluded: Boolean(p.hasAccessoriesIncluded),
+      isActive: p.isActive !== false,
+    }));
+
+  const rawAddons =
+    rawWpc.addons && typeof rawWpc.addons === 'object' ? rawWpc.addons : {};
+  const savedOrder: string[] = Array.isArray(rawWpc.addonOrder)
+    ? rawWpc.addonOrder.filter((k: unknown): k is string => typeof k === 'string')
+    : [];
+
+  const addons: Record<string, WpcAddonConfig> = {};
+  const addonOrder: string[] = [];
+
+  for (const key of Array.from(
+    new Set([
+      ...savedOrder,
+      ...DEFAULT_WPC_PRICING_CONFIG.addonOrder,
+      ...Object.keys(rawAddons),
+    ])
+  )) {
+    const candidate = rawAddons[key] || DEFAULT_WPC_PRICING_CONFIG.addons[key];
+    if (candidate && typeof candidate === 'object') {
+      addons[key] = {
+        key,
+        name: String(candidate.name || DEFAULT_WPC_PRICING_CONFIG.addons[key]?.name || key),
+        description: String(candidate.description || ''),
+        price: Number.isFinite(Number(candidate.price))
+          ? Number(candidate.price)
+          : DEFAULT_WPC_PRICING_CONFIG.addons[key]?.price || 0,
+      };
+      addonOrder.push(key);
+    }
+  }
+
+  const rawArmored = Array.isArray(data.armored)
+    ? data.armored
+    : DEFAULT_ARMORED_DOOR_TYPES;
+
+  const armored: ArmoredDoorTypeConfig[] = rawArmored
+    .filter((a: any) => a && typeof a === 'object' && String(a.label || '').trim())
+    .map((a: any, idx: number) => {
+      const specs = String(a.specs || a.productName || a.label || '');
+      const includesTransportAndInstall = a.includesTransportAndInstall !== false;
+      return {
+        id: String(a.id || `armored_type_${idx + 1}`),
+        label: String(a.label),
+        productName: String(a.productName || specs || a.label),
+        specs,
+        price: Number.isFinite(Number(a.price)) ? Number(a.price) : 0,
+        badge: String(a.badge || 'مواصفات معتمدة'),
+        description: String(
+          a.description ||
+            `${specs} · ${includesTransportAndInstall ? 'السعر شامل النقل والتركيب' : 'السعر غير شامل النقل والتركيب'}`
+        ),
+        includesTransportAndInstall,
+        isActive: a.isActive !== false,
+      };
+    });
+
+  return {
+    wpc: {
+      packages: packages.length > 0 ? packages : JSON.parse(JSON.stringify(DEFAULT_WPC_PRICING_CONFIG.packages)),
+      addons,
+      addonOrder,
+    },
+    armored: armored.length > 0 ? armored : JSON.parse(JSON.stringify(DEFAULT_ARMORED_DOOR_TYPES)),
+    version: Number(data.version) || 1,
+    updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : '',
+  };
+}
+
+async function readAuthoritativeDoorsPricingDocData(): Promise<{
+  exists: boolean;
+  data: Record<string, any> | null;
+}> {
+  const doorsRef = doc(db, SETTINGS_COLLECTION, DOORS_PRICING_DOC_ID);
+  const dbSegment = firebaseConfig.firestoreDatabaseId || '(default)';
+  const directRestUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+    firebaseConfig.projectId
+  )}/databases/${encodeURIComponent(
+    dbSegment
+  )}/documents/${SETTINGS_COLLECTION}/${DOORS_PRICING_DOC_ID}?key=${encodeURIComponent(
+    firebaseConfig.apiKey
+  )}`;
+
+  const sdkPromise = withTimeout(
+    getDocFromServer(doorsRef),
+    9000,
+    'انتهت مهلة قراءة أسعار الأبواب من قاعدة البيانات.'
+  ).then((snap) => ({
+    exists: snap.exists(),
+    data: snap.exists() ? (snap.data() as Record<string, any>) : null,
+  }));
+
+  const directRestPromise = fetchPricingDocViaRestUrl(directRestUrl, 6500);
+
+  try {
+    return await Promise.any([directRestPromise, sdkPromise]);
+  } catch (aggregateErr: any) {
+    const subErrors: unknown[] = Array.isArray(aggregateErr?.errors)
+      ? aggregateErr.errors
+      : [aggregateErr];
+    const permErr = subErrors.find(isPermissionDeniedError);
+    if (permErr) {
+      throw permErr;
+    }
+
+    if (typeof window !== 'undefined') {
+      return await fetchPricingDocViaRestUrl('/api/doors-pricing', 7500);
+    }
+    throw new Error('انتهت مهلة الاتصال بقاعدة البيانات لتحميل أسعار الأبواب.');
+  }
+}
+
+export async function fetchDoorsPricingFromCloud(): Promise<DoorsPricingConfig | null> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new Error('لا يوجد اتصال بالإنترنت لتحميل أسعار الأبواب من قاعدة البيانات.');
+  }
+
+  try {
+    const result = await readAuthoritativeDoorsPricingDocData();
+    if (!result.exists || !result.data) {
+      return null;
+    }
+    return reconstructDoorsPricing(result.data);
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      handleFirestoreError(error, OperationType.GET, `${SETTINGS_COLLECTION}/${DOORS_PRICING_DOC_ID}`);
+    }
+    console.warn(
+      '[Firestore] Issue loading doors pricing from cloud:',
+      error instanceof Error ? error.message : String(error)
+    );
+    throw new Error('تعذر تحميل أسعار أبواب WPC والأبواب المصفحة من قاعدة البيانات.');
+  }
+}
+
+export function subscribeToDoorsPricing(
+  onUpdate: (config: DoorsPricingConfig) => void,
+  onError?: (err: Error) => void
+): () => void {
+  try {
+    const doorsRef = doc(db, SETTINGS_COLLECTION, DOORS_PRICING_DOC_ID);
+    return onSnapshot(
+      doorsRef,
+      { includeMetadataChanges: true },
+      (snap) => {
+        if (snap.metadata.fromCache || snap.metadata.hasPendingWrites) {
+          return;
+        }
+        if (!snap.exists()) {
+          return;
+        }
+        onUpdate(reconstructDoorsPricing(snap.data()));
+      },
+      (err) => {
+        console.warn('[Firestore] Doors pricing realtime subscription error:', err);
+        if (isPermissionDeniedError(err)) {
+          handleFirestoreError(err, OperationType.GET, `${SETTINGS_COLLECTION}/${DOORS_PRICING_DOC_ID}`);
+        }
+        if (onError) {
+          onError(err);
+        }
+      }
+    );
+  } catch (error) {
+    console.warn('[Firestore] Doors pricing subscribe init failed:', error);
+    return () => {};
+  }
+}
+
+export async function saveDoorsPricingToCloud(
+  rawConfig: { wpc: WpcPricingConfig; armored: ArmoredDoorTypeConfig[] },
+  adminProof: string
+): Promise<DoorsPricingConfig> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new Error('فشل حفظ أسعار الأبواب: لا يوجد اتصال بالإنترنت حالياً.');
+  }
+
+  if (!adminProof || !/^[0-9a-f]{64}$/.test(adminProof)) {
+    throw new Error('انتهت صلاحية جلسة المشرف. يرجى إعادة إدخال الرمز السري والمحاولة مرة أخرى.');
+  }
+
+  const sanitized = sanitizeAndValidateDoorsPricing(rawConfig);
+  const doorsRef = doc(db, SETTINGS_COLLECTION, DOORS_PRICING_DOC_ID);
+  const gateRef = doc(db, ADMIN_GATE_COLLECTION, 'doors_pricing_write');
+
+  try {
+    const currentDoc = await readAuthoritativeDoorsPricingDocData();
+    const currentVersion =
+      currentDoc.exists && currentDoc.data ? Number(currentDoc.data.version) || 0 : 0;
+    const nextVersion = currentVersion + 1;
+    const updatedAt = new Date().toISOString();
+
+    const batch = writeBatch(db);
+    batch.set(gateRef, {
+      proof: adminProof,
+      verifiedAt: serverTimestamp(),
+    });
+    batch.set(
+      doorsRef,
+      stripUndefinedDeep({
+        wpc: sanitized.wpc,
+        armored: sanitized.armored,
+        version: nextVersion,
+        updatedAt,
+        serverUpdatedAt: serverTimestamp(),
+      })
+    );
+
+    await withTimeout(
+      batch.commit(),
+      20000,
+      'انتهت مهلة حفظ أسعار الأبواب في قاعدة البيانات. لم يتم تأكيد الحفظ، يرجى المحاولة مرة أخرى.'
+    );
+
+    const confirmedDoc = await readAuthoritativeDoorsPricingDocData();
+    if (!confirmedDoc.exists || !confirmedDoc.data) {
+      throw new Error('لم يتم العثور على سجل أسعار الأبواب في قاعدة البيانات بعد الحفظ.');
+    }
+
+    const confirmedConfig = reconstructDoorsPricing(confirmedDoc.data);
+    if (confirmedConfig.version < nextVersion) {
+      throw new Error('لم يتم تأكيد تحديث رقم إصدار أسعار الأبواب على الخادم.');
+    }
+
+    return confirmedConfig;
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      console.error(
+        'Firestore Error: ',
+        JSON.stringify(
+          buildFirestoreErrorInfo(
+            error,
+            OperationType.WRITE,
+            `${SETTINGS_COLLECTION}/${DOORS_PRICING_DOC_ID}`
+          )
+        )
+      );
+    } else {
+      console.warn('[Firestore] Error saving doors pricing to cloud:', error);
+    }
+
+    const msg = error instanceof Error ? error.message : String(error);
+    const lower = msg.toLowerCase();
+    const code = (error as { code?: string })?.code?.toLowerCase() || '';
+
+    if (
+      code.includes('permission-denied') ||
+      lower.includes('permission-denied') ||
+      lower.includes('missing or insufficient permissions')
+    ) {
+      throw new Error('فشل الحفظ: غير مصرح بتعديل أسعار الأبواب أو الرمز السري غير صالح.');
+    }
+    if (lower.includes('offline') || code.includes('unavailable')) {
+      throw new Error('تعذر الاتصال بقاعدة البيانات (أنت غير متصل بالإنترنت). لم يتم حفظ التعديلات.');
+    }
+    if (/[\u0600-\u06FF]/.test(msg)) {
+      throw new Error(msg);
+    }
+    throw new Error('تعذر حفظ أسعار الأبواب في قاعدة البيانات. يرجى المحاولة مرة أخرى.');
   }
 }
 

@@ -16,9 +16,20 @@ import {
   PricingConfig,
   WpcDoorItem,
   ArmoredDoorItem,
+  WpcPricingConfig,
+  ArmoredDoorTypeConfig,
+  DoorsPricingConfig,
 } from './types';
 import { PROFILES, ADDONS, BRAND_NAME } from './constants';
-import { calculateArmoredQuoteTotal } from './constants/armoredConstants';
+import {
+  DEFAULT_WPC_PRICING_CONFIG,
+  cloneDefaultWpcPricingConfig,
+} from './constants/wpcConstants';
+import {
+  DEFAULT_ARMORED_DOOR_TYPES,
+  cloneDefaultArmoredDoorTypes,
+  calculateArmoredQuoteTotal,
+} from './constants/armoredConstants';
 import { DevSettingsModal } from './components/DevSettingsModal';
 import {
   saveQuoteToCloud,
@@ -41,6 +52,9 @@ import {
   fetchPricingFromCloud,
   subscribeToPricing,
   savePricingToCloud,
+  fetchDoorsPricingFromCloud,
+  subscribeToDoorsPricing,
+  saveDoorsPricingToCloud,
 } from './firebase';
 
 import Header from './components/Header';
@@ -185,6 +199,19 @@ export default function App() {
   );
   const [pricingErrorText, setPricingErrorText] = useState<string | null>(null);
 
+  // Authoritative shared Doors Pricing state (WPC + Armored, strictly isolated from PVC and never stored in localStorage)
+  const [doorsPricing, setDoorsPricing] = useState<DoorsPricingConfig>(() => ({
+    wpc: cloneDefaultWpcPricingConfig(),
+    armored: cloneDefaultArmoredDoorTypes(),
+    version: 0,
+    updatedAt: '',
+  }));
+  const doorsPricingVersionRef = useRef<number>(0);
+  const [doorsPricingSyncStatus, setDoorsPricingSyncStatus] = useState<
+    'loading' | 'synced' | 'error'
+  >('loading');
+  const [doorsPricingErrorText, setDoorsPricingErrorText] = useState<string | null>(null);
+
   // Preserves historical saved quote prices when viewing a previously saved quotation
   const [loadedQuotePricing, setLoadedQuotePricing] = useState<{
     quoteName: string;
@@ -275,6 +302,37 @@ export default function App() {
     }
   }, [applyConfirmedPricing]);
 
+  const applyConfirmedDoorsPricing = useCallback((config: DoorsPricingConfig) => {
+    if (config.version < doorsPricingVersionRef.current) {
+      return;
+    }
+    doorsPricingVersionRef.current = config.version;
+    setDoorsPricing(config);
+    setDoorsPricingSyncStatus('synced');
+    setDoorsPricingErrorText(null);
+  }, []);
+
+  const loadLatestDoorsPricingFromServer = useCallback(async () => {
+    setDoorsPricingSyncStatus((prev) => (prev === 'synced' ? 'synced' : 'loading'));
+    try {
+      const cloudDoorsPricing = await fetchDoorsPricingFromCloud();
+      if (cloudDoorsPricing) {
+        applyConfirmedDoorsPricing(cloudDoorsPricing);
+      } else {
+        setDoorsPricingSyncStatus('synced');
+        setDoorsPricingErrorText(null);
+      }
+    } catch (err) {
+      console.warn('[DoorsPricing] Could not fetch authoritative doors pricing:', err);
+      if (doorsPricingVersionRef.current === 0) {
+        setDoorsPricingSyncStatus('error');
+        setDoorsPricingErrorText(
+          'تعذر الاتصال بقاعدة البيانات لتحميل أحدث أسعار أبواب WPC والأبواب المصفحة.'
+        );
+      }
+    }
+  }, [applyConfirmedDoorsPricing]);
+
   useEffect(() => {
     // Purge legacy browser-local pricing overrides so localStorage can never shadow shared database prices
     try {
@@ -283,10 +341,14 @@ export default function App() {
     } catch {}
 
     loadLatestPricingFromServer();
+    loadLatestDoorsPricingFromServer();
 
     const handleOnline = () => {
       if (pricingVersionRef.current === 0) {
         void loadLatestPricingFromServer();
+      }
+      if (doorsPricingVersionRef.current === 0) {
+        void loadLatestDoorsPricingFromServer();
       }
     };
     window.addEventListener('online', handleOnline);
@@ -305,11 +367,31 @@ export default function App() {
       }
     );
 
+    const unsubscribeDoorsPricing = subscribeToDoorsPricing(
+      (liveDoorsPricing) => {
+        applyConfirmedDoorsPricing(liveDoorsPricing);
+      },
+      () => {
+        if (doorsPricingVersionRef.current === 0) {
+          setDoorsPricingSyncStatus('error');
+          setDoorsPricingErrorText(
+            'تعذر الاتصال بقاعدة البيانات لتحميل أحدث أسعار أبواب WPC والأبواب المصفحة.'
+          );
+        }
+      }
+    );
+
     return () => {
       window.removeEventListener('online', handleOnline);
       if (typeof unsubscribePricing === 'function') unsubscribePricing();
+      if (typeof unsubscribeDoorsPricing === 'function') unsubscribeDoorsPricing();
     };
-  }, [applyConfirmedPricing, loadLatestPricingFromServer]);
+  }, [
+    applyConfirmedPricing,
+    loadLatestPricingFromServer,
+    applyConfirmedDoorsPricing,
+    loadLatestDoorsPricingFromServer,
+  ]);
 
   const fetchCustomersFromAllSources = async () => {
     try {
@@ -545,6 +627,57 @@ export default function App() {
     applyConfirmedPricing(confirmedConfig);
     return confirmedConfig;
   };
+
+  const handleSaveDoorsPricing = async (
+    updatedDoorsPricing: { wpc: WpcPricingConfig; armored: ArmoredDoorTypeConfig[] },
+    adminProof: string
+  ): Promise<DoorsPricingConfig> => {
+    const confirmed = await saveDoorsPricingToCloud(updatedDoorsPricing, adminProof);
+    applyConfirmedDoorsPricing(confirmed);
+    return confirmed;
+  };
+
+  const handleResetDoorsPricing = async (
+    adminProof: string
+  ): Promise<DoorsPricingConfig> => {
+    const confirmed = await saveDoorsPricingToCloud(
+      {
+        wpc: DEFAULT_WPC_PRICING_CONFIG,
+        armored: DEFAULT_ARMORED_DOOR_TYPES,
+      },
+      adminProof
+    );
+    applyConfirmedDoorsPricing(confirmed);
+    return confirmed;
+  };
+
+  const usedWpcTypeIds = useMemo(() => {
+    const used = new Set<string>();
+    const collect = (doors?: WpcDoorItem[]) => {
+      if (!Array.isArray(doors)) return;
+      for (const d of doors) {
+        if (d.packageId) used.add(d.packageId);
+        if (d.basePackage !== undefined) used.add(String(d.basePackage));
+      }
+    };
+    collect(wpcDoors);
+    for (const q of savedWpcQuotes) collect(q.wpcDoors);
+    for (const q of savedQuotes) collect(q.wpcDoors);
+    return used;
+  }, [wpcDoors, savedWpcQuotes, savedQuotes]);
+
+  const usedArmoredTypeIds = useMemo(() => {
+    const used = new Set<string>();
+    const collect = (doors?: ArmoredDoorItem[]) => {
+      if (!Array.isArray(doors)) return;
+      for (const d of doors) {
+        if (d.manufactureType) used.add(d.manufactureType);
+      }
+    };
+    collect(armoredDoors);
+    for (const q of savedArmoredQuotes) collect(q.armoredDoors);
+    return used;
+  }, [armoredDoors, savedArmoredQuotes]);
 
   const switchLoadedQuoteToLivePricing = () => {
     setLoadedQuotePricing(null);
@@ -1404,6 +1537,10 @@ export default function App() {
 
                 <WpcDoorsSection
                   wpcDoors={wpcDoors}
+                  wpcPricing={doorsPricing.wpc}
+                  pricingSyncStatus={doorsPricingSyncStatus}
+                  pricingErrorText={doorsPricingErrorText}
+                  onRetryLoadPricing={loadLatestDoorsPricingFromServer}
                   onAddDoor={handleAddWpcDoor}
                   onUpdateDoor={handleUpdateWpcDoor}
                   onRemoveDoor={handleRemoveWpcDoor}
@@ -1640,6 +1777,10 @@ export default function App() {
 
                 <ArmoredDoorsSection
                   armoredDoors={armoredDoors}
+                  armoredTypes={doorsPricing.armored}
+                  pricingSyncStatus={doorsPricingSyncStatus}
+                  pricingErrorText={doorsPricingErrorText}
+                  onRetryLoadPricing={loadLatestDoorsPricingFromServer}
                   onAddDoor={handleAddArmoredDoor}
                   onUpdateDoor={handleUpdateArmoredDoor}
                   onRemoveDoor={handleRemoveArmoredDoor}
@@ -1698,6 +1839,11 @@ export default function App() {
             addons={addons}
             onSavePrices={handleSavePrices}
             onResetPrices={handleResetPrices}
+            doorsPricing={doorsPricing}
+            onSaveDoorsPricing={handleSaveDoorsPricing}
+            onResetDoorsPricing={handleResetDoorsPricing}
+            usedWpcTypeIds={usedWpcTypeIds}
+            usedArmoredTypeIds={usedArmoredTypeIds}
           />
         )}
       </AnimatePresence>

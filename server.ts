@@ -76,7 +76,7 @@ async function startServer() {
   app.use(express.json());
 
   // Live Authoritative Pricing Relay Endpoint (reads directly from Firestore REST v1 with no-store)
-  app.get("/api/pricing", async (_req, res) => {
+  async function relaySettingsDoc(docId: string, res: express.Response) {
     try {
       const cfgPath = path.join(process.cwd(), "firebase-applet-config.json");
       const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
@@ -85,7 +85,7 @@ async function startServer() {
         cfg.projectId
       )}/databases/${encodeURIComponent(
         dbSegment
-      )}/documents/settings/pricing?key=${encodeURIComponent(cfg.apiKey)}`;
+      )}/documents/settings/${encodeURIComponent(docId)}?key=${encodeURIComponent(cfg.apiKey)}`;
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
@@ -106,6 +106,14 @@ async function startServer() {
     } catch (err: any) {
       return res.status(502).json({ error: err?.message || "تعذر الاتصال بقاعدة البيانات" });
     }
+  }
+
+  app.get("/api/pricing", async (_req, res) => {
+    await relaySettingsDoc("pricing", res);
+  });
+
+  app.get("/api/doors-pricing", async (_req, res) => {
+    await relaySettingsDoc("doors_pricing", res);
   });
 
   // Quotes API Endpoints

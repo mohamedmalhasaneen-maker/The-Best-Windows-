@@ -18,9 +18,17 @@ import {
   Loader2,
   AlertCircle,
 } from 'lucide-react';
-import { Profile, Addon, PricingConfig } from '../types';
+import {
+  Profile,
+  Addon,
+  PricingConfig,
+  WpcPricingConfig,
+  ArmoredDoorTypeConfig,
+  DoorsPricingConfig,
+} from '../types';
 import { BRAND_NAME } from '../constants';
 import { verifyAdminPasscode } from '../firebase';
+import { DoorsPricingSettingsPanel } from './DoorsPricingSettingsPanel';
 
 interface DevSettingsModalProps {
   isOpen: boolean;
@@ -33,6 +41,14 @@ interface DevSettingsModalProps {
     adminProof: string
   ) => Promise<PricingConfig>;
   onResetPrices: (adminProof: string) => Promise<PricingConfig>;
+  doorsPricing: DoorsPricingConfig;
+  onSaveDoorsPricing: (
+    updatedDoorsPricing: { wpc: WpcPricingConfig; armored: ArmoredDoorTypeConfig[] },
+    adminProof: string
+  ) => Promise<DoorsPricingConfig>;
+  onResetDoorsPricing: (adminProof: string) => Promise<DoorsPricingConfig>;
+  usedWpcTypeIds?: Set<string>;
+  usedArmoredTypeIds?: Set<string>;
 }
 
 type PricingModeKey = 'sqm' | 'piece' | 'single_sash' | 'double_sash' | 'opening';
@@ -70,16 +86,27 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
   addons,
   onSavePrices,
   onResetPrices,
+  doorsPricing,
+  onSaveDoorsPricing,
+  onResetDoorsPricing,
+  usedWpcTypeIds = new Set<string>(),
+  usedArmoredTypeIds = new Set<string>(),
 }) => {
   const [password, setPassword] = useState('');
   const [isVerifyingPasscode, setIsVerifyingPasscode] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [adminProof, setAdminProof] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [activeTab, setActiveTab] = useState<'profiles' | 'addons'>('profiles');
+  const [activeTab, setActiveTab] = useState<'profiles' | 'addons' | 'doors'>('profiles');
 
   const [tempProfiles, setTempProfiles] = useState<Record<string, Profile>>({});
   const [tempAddons, setTempAddons] = useState<Record<string, Addon>>({});
+  const [tempDoorsWpc, setTempDoorsWpc] = useState<WpcPricingConfig>(() =>
+    JSON.parse(JSON.stringify(doorsPricing.wpc))
+  );
+  const [tempDoorsArmored, setTempDoorsArmored] = useState<ArmoredDoorTypeConfig[]>(() =>
+    JSON.parse(JSON.stringify(doorsPricing.armored))
+  );
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -103,6 +130,8 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
     if (isOpen && !wasOpenRef.current) {
       setTempProfiles(JSON.parse(JSON.stringify(profiles)));
       setTempAddons(JSON.parse(JSON.stringify(addons)));
+      setTempDoorsWpc(JSON.parse(JSON.stringify(doorsPricing.wpc)));
+      setTempDoorsArmored(JSON.parse(JSON.stringify(doorsPricing.armored)));
       setIsAuthorized(false);
       setAdminProof('');
       setIsVerifyingPasscode(false);
@@ -121,7 +150,7 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
       } catch {}
     }
     wasOpenRef.current = isOpen;
-  }, [isOpen, profiles, addons]);
+  }, [isOpen, profiles, addons, doorsPricing]);
 
   const showBanner = (type: 'success' | 'warning' | 'error', text: string) => {
     setStatusBanner({ type, text });
@@ -141,6 +170,8 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
       // Refresh temp copies with latest active prices right as developer enters panel
       setTempProfiles(JSON.parse(JSON.stringify(profiles)));
       setTempAddons(JSON.parse(JSON.stringify(addons)));
+      setTempDoorsWpc(JSON.parse(JSON.stringify(doorsPricing.wpc)));
+      setTempDoorsArmored(JSON.parse(JSON.stringify(doorsPricing.armored)));
       setAdminProof(result.proof);
       setIsAuthorized(true);
       setErrorMsg('');
@@ -422,6 +453,65 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
     }
   };
 
+  const handleSaveDoors = async () => {
+    if (isSaving) return;
+
+    setIsSaving(true);
+    setSaveSuccess(false);
+    setStatusBanner(null);
+
+    try {
+      const confirmed = await onSaveDoorsPricing(
+        { wpc: tempDoorsWpc, armored: tempDoorsArmored },
+        adminProof
+      );
+      setTempDoorsWpc(JSON.parse(JSON.stringify(confirmed.wpc)));
+      setTempDoorsArmored(JSON.parse(JSON.stringify(confirmed.armored)));
+      setSaveSuccess(true);
+      showBanner(
+        'success',
+        `تم حفظ أسعار أبواب WPC والأبواب المصفحة في قاعدة البيانات بنجاح (الإصدار رقم ${confirmed.version}) وتنعكس الآن على العروض الجديدة فقط.`
+      );
+    } catch (error) {
+      setSaveSuccess(false);
+      const errText =
+        error instanceof Error
+          ? error.message
+          : 'حدث خطأ أثناء حفظ أسعار الأبواب في قاعدة البيانات. يرجى المحاولة مرة أخرى.';
+      showBanner('error', errText);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleResetDoors = async () => {
+    if (isSaving) return;
+
+    setIsSaving(true);
+    setSaveSuccess(false);
+    setStatusBanner(null);
+
+    try {
+      const confirmed = await onResetDoorsPricing(adminProof);
+      setTempDoorsWpc(JSON.parse(JSON.stringify(confirmed.wpc)));
+      setTempDoorsArmored(JSON.parse(JSON.stringify(confirmed.armored)));
+      setConfirmReset(false);
+      setSaveSuccess(true);
+      showBanner(
+        'success',
+        `تمت استعادة الأسعار الافتراضية لأبواب WPC والأبواب المصفحة وحفظها في قاعدة البيانات بنجاح (الإصدار رقم ${confirmed.version}).`
+      );
+    } catch (error) {
+      const errText =
+        error instanceof Error
+          ? error.message
+          : 'فشل استعادة أسعار الأبواب الافتراضية في قاعدة البيانات. يرجى المحاولة مرة أخرى.';
+      showBanner('error', errText);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   const profileList = Object.values(tempProfiles) as Profile[];
@@ -596,102 +686,139 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
                 )}
 
                 {/* Tabs */}
-                <div className="flex border-b-2 border-slate-200">
+                <div className="flex flex-wrap border-b-2 border-slate-200 gap-1">
                   <button
                     type="button"
                     onClick={() => {
                       setActiveTab('profiles');
                       setConfirmDeleteId(null);
+                      setConfirmReset(false);
                     }}
-                    className={`flex-1 py-3 text-center font-black text-sm transition-all border-b-4 flex items-center justify-center gap-2 cursor-pointer ${
+                    className={`flex-1 min-w-[140px] py-3 px-2 text-center font-black text-xs sm:text-sm transition-all border-b-4 flex items-center justify-center gap-1.5 cursor-pointer ${
                       activeTab === 'profiles'
                         ? 'border-[#0F172A] text-[#0F172A] bg-white rounded-t-xl'
                         : 'border-transparent text-slate-500 hover:text-[#0F172A]'
                     }`}
                   >
-                    <Layers size={16} />
-                    <span>أسعار القطاعات والبروفايلات ({profileList.length})</span>
+                    <Layers size={15} />
+                    <span>قطاعات UPVC ({profileList.length})</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => {
                       setActiveTab('addons');
                       setConfirmDeleteId(null);
+                      setConfirmReset(false);
                     }}
-                    className={`flex-1 py-3 text-center font-black text-sm transition-all border-b-4 flex items-center justify-center gap-2 cursor-pointer ${
+                    className={`flex-1 min-w-[140px] py-3 px-2 text-center font-black text-xs sm:text-sm transition-all border-b-4 flex items-center justify-center gap-1.5 cursor-pointer ${
                       activeTab === 'addons'
                         ? 'border-[#0F172A] text-[#0F172A] bg-white rounded-t-xl'
                         : 'border-transparent text-slate-500 hover:text-[#0F172A]'
                     }`}
                   >
-                    <Sliders size={16} />
-                    <span>أسعار الخيارات والإضافات ({addonList.length})</span>
+                    <Sliders size={15} />
+                    <span>خيارات UPVC ({addonList.length})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('doors');
+                      setConfirmDeleteId(null);
+                      setConfirmReset(false);
+                    }}
+                    className={`flex-1 min-w-[160px] py-3 px-2 text-center font-black text-xs sm:text-sm transition-all border-b-4 flex items-center justify-center gap-1.5 cursor-pointer ${
+                      activeTab === 'doors'
+                        ? 'border-[#F59E0B] text-[#0F172A] bg-amber-50/90 rounded-t-xl'
+                        : 'border-transparent text-slate-600 hover:text-[#0F172A]'
+                    }`}
+                  >
+                    <Coins size={15} className="text-amber-600" />
+                    <span>إدارة أسعار الأبواب</span>
                   </button>
                 </div>
 
                 {/* Form fields */}
                 <div className="space-y-6">
-                  {/* Add New Custom Item Box */}
-                  <div className="bg-amber-50/80 border-2 border-amber-200/70 p-4 rounded-2xl space-y-3">
-                    <h4 className="text-xs font-black text-amber-900 flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                      <span>إضافة قطاع جديد أو إضافة اختيارية جديدة</span>
-                    </h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      <select
-                        value={newItemType}
-                        disabled={isSaving}
-                        onChange={(e) => setNewItemType(e.target.value as 'profile' | 'addon')}
-                        className="p-2.5 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
-                      >
-                        <option value="profile">قطاع جديد (Profile)</option>
-                        <option value="addon">إضافة اختيارية جديدة (Addon)</option>
-                      </select>
-                      <input
-                        type="text"
-                        value={newItemName}
-                        disabled={isSaving}
-                        onChange={(e) => setNewItemName(e.target.value)}
-                        placeholder="اسم القطاع أو الإضافة (مثل: قطاع لامينا)"
-                        className="p-2.5 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none"
-                      />
-                      <select
-                        value={newItemPricingMode}
-                        disabled={isSaving}
-                        onChange={(e) =>
-                          setNewItemPricingMode(
-                            e.target.value as 'sqm' | 'piece' | 'single_sash' | 'double_sash'
-                          )
-                        }
-                        aria-label="طريقة تطبيق السعر"
-                        className="p-2.5 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
-                      >
-                        <option value="sqm">تطبيق السعر: للمتر المربع</option>
-                        <option value="piece">تطبيق السعر: للقطعة</option>
-                        <option value="single_sash">تطبيق السعر: للضلفة</option>
-                        <option value="double_sash">تطبيق السعر: للضلفتين</option>
-                      </select>
-                      <div className="flex gap-2">
-                        <input
-                          type="number"
-                          value={newItemPrice}
-                          disabled={isSaving}
-                          onChange={(e) => setNewItemPrice(e.target.value)}
-                          placeholder={`السعر (${PRICING_MODE_OPTIONS[newItemPricingMode].label})`}
-                          className="w-full p-2.5 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none"
-                          min="0"
-                        />
-                        <button
-                          type="button"
-                          disabled={isSaving}
-                          onClick={handleAddCustomItem}
-                          className="bg-[#0F172A] hover:bg-black text-[#FACC15] px-4 py-2.5 rounded-xl font-black text-xs shrink-0 cursor-pointer shadow-sm disabled:opacity-50"
-                        >
-                          إضافة
-                        </button>
+                  {activeTab === 'doors' ? (
+                    <DoorsPricingSettingsPanel
+                      wpcPricing={tempDoorsWpc}
+                      armoredTypes={tempDoorsArmored}
+                      onChangeWpc={(next) => {
+                        markDirty();
+                        setTempDoorsWpc(next);
+                      }}
+                      onChangeArmored={(next) => {
+                        markDirty();
+                        setTempDoorsArmored(next);
+                      }}
+                      usedWpcTypeIds={usedWpcTypeIds}
+                      usedArmoredTypeIds={usedArmoredTypeIds}
+                      isSaving={isSaving}
+                      onBanner={showBanner}
+                    />
+                  ) : (
+                    <>
+                      {/* Add New Custom Item Box (UPVC only) */}
+                      <div className="bg-amber-50/80 border-2 border-amber-200/70 p-4 rounded-2xl space-y-3">
+                        <h4 className="text-xs font-black text-amber-900 flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                          <span>إضافة قطاع جديد أو إضافة اختيارية جديدة (UPVC)</span>
+                        </h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <select
+                            value={newItemType}
+                            disabled={isSaving}
+                            onChange={(e) => setNewItemType(e.target.value as 'profile' | 'addon')}
+                            className="p-2.5 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                          >
+                            <option value="profile">قطاع جديد (Profile)</option>
+                            <option value="addon">إضافة اختيارية جديدة (Addon)</option>
+                          </select>
+                          <input
+                            type="text"
+                            value={newItemName}
+                            disabled={isSaving}
+                            onChange={(e) => setNewItemName(e.target.value)}
+                            placeholder="اسم القطاع أو الإضافة (مثل: قطاع لامينا)"
+                            className="p-2.5 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none"
+                          />
+                          <select
+                            value={newItemPricingMode}
+                            disabled={isSaving}
+                            onChange={(e) =>
+                              setNewItemPricingMode(
+                                e.target.value as 'sqm' | 'piece' | 'single_sash' | 'double_sash'
+                              )
+                            }
+                            aria-label="طريقة تطبيق السعر"
+                            className="p-2.5 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                          >
+                            <option value="sqm">تطبيق السعر: للمتر المربع</option>
+                            <option value="piece">تطبيق السعر: للقطعة</option>
+                            <option value="single_sash">تطبيق السعر: للضلفة</option>
+                            <option value="double_sash">تطبيق السعر: للضلفتين</option>
+                          </select>
+                          <div className="flex gap-2">
+                            <input
+                              type="number"
+                              value={newItemPrice}
+                              disabled={isSaving}
+                              onChange={(e) => setNewItemPrice(e.target.value)}
+                              placeholder={`السعر (${PRICING_MODE_OPTIONS[newItemPricingMode].label})`}
+                              className="w-full p-2.5 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none"
+                              min="0"
+                            />
+                            <button
+                              type="button"
+                              disabled={isSaving}
+                              onClick={handleAddCustomItem}
+                              className="bg-[#0F172A] hover:bg-black text-[#FACC15] px-4 py-2.5 rounded-xl font-black text-xs shrink-0 cursor-pointer shadow-sm disabled:opacity-50"
+                            >
+                              إضافة
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
 
                   {activeTab === 'profiles' ? (
                     <div className="space-y-3">
@@ -888,6 +1015,8 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
                         })
                       )}
                     </div>
+                      )}
+                    </>
                   )}
                 </div>
               </motion.div>
@@ -903,11 +1032,15 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
                 <button
                   type="button"
                   disabled={isSaving}
-                  onClick={handleReset}
+                  onClick={activeTab === 'doors' ? handleResetDoors : handleReset}
                   className="text-xs font-black text-white bg-red-600 hover:bg-red-700 px-4 py-2.5 rounded-xl transition cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
                 >
                   {isSaving && <Loader2 size={14} className="animate-spin" />}
-                  <span>تأكيد استعادة الافتراضي</span>
+                  <span>
+                    {activeTab === 'doors'
+                      ? 'تأكيد استعادة أسعار الأبواب الافتراضية'
+                      : 'تأكيد استعادة الافتراضي'}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -926,7 +1059,11 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
                 className="w-full sm:w-auto text-xs font-black text-slate-600 hover:text-[#0F172A] hover:bg-white px-4 py-3 rounded-xl border border-slate-200 hover:border-slate-350 transition flex items-center gap-2 justify-center cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw size={14} />
-                <span>إعادة تعيين للإعدادات الافتراضية</span>
+                <span>
+                  {activeTab === 'doors'
+                    ? 'استعادة الأسعار الافتراضية'
+                    : 'إعادة تعيين للإعدادات الافتراضية'}
+                </span>
               </button>
             )}
 
@@ -942,7 +1079,7 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
               <button
                 type="button"
                 disabled={isSaving}
-                onClick={handleSave}
+                onClick={activeTab === 'doors' ? handleSaveDoors : handleSave}
                 className="flex-1 sm:flex-none text-xs font-black bg-[#FACC15] hover:bg-[#E2B90F] disabled:opacity-70 disabled:cursor-not-allowed text-[#0F172A] px-6 py-3 rounded-xl shadow transition duration-150 flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
               >
                 {isSaving ? (
@@ -956,7 +1093,9 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
                     <span>تم تأكيد الحفظ!</span>
                   </>
                 ) : (
-                  <span>حفظ جميع الأسعار</span>
+                  <span>
+                    {activeTab === 'doors' ? 'حفظ التغييرات' : 'حفظ جميع الأسعار'}
+                  </span>
                 )}
               </button>
             </div>

@@ -73,7 +73,7 @@ export interface PricingConfig {
 }
 
 export type WpcSizeType = '70x215' | '80x215' | '90x215' | 'custom';
-export type WpcPackageType = 9000 | 7000;
+export type WpcPackageType = number;
 
 export interface WpcAddons {
   accessories?: boolean;
@@ -84,6 +84,12 @@ export interface WpcAddons {
   claddingDouble?: boolean;
 }
 
+export interface WpcAddonSnapshotItem {
+  key: string;
+  name: string;
+  price: number;
+}
+
 export interface WpcDoorItem {
   id: number;
   title: string;
@@ -91,10 +97,38 @@ export interface WpcDoorItem {
   customWidth?: number;
   customHeight?: number;
   basePackage: WpcPackageType;
+  packageId?: string;
+  packageName?: string;
+  packageBadge?: string;
+  basePackagePrice?: number;
   addons: WpcAddons;
+  activeAddonsSnapshot?: WpcAddonSnapshotItem[];
   quantity: number;
   unitPrice: number;
   totalPrice: number;
+}
+
+export interface WpcDoorPackageConfig {
+  id: string;
+  name: string;
+  description: string;
+  badge: string;
+  price: number;
+  hasAccessoriesIncluded: boolean;
+  isActive: boolean;
+}
+
+export interface WpcAddonConfig {
+  key: keyof WpcAddons | string;
+  name: string;
+  description: string;
+  price: number;
+}
+
+export interface WpcPricingConfig {
+  packages: WpcDoorPackageConfig[];
+  addons: Record<string, WpcAddonConfig>;
+  addonOrder: string[];
 }
 
 export interface SavedQuote {
@@ -121,7 +155,26 @@ export interface SavedWpcQuote {
   date: string;
 }
 
-export type ArmoredDoorManufactureType = 'turkish_turkish' | 'turkish_egyptian';
+export type ArmoredDoorManufactureType = string;
+
+export interface ArmoredDoorTypeConfig {
+  id: string;
+  label: string;
+  productName: string;
+  specs: string;
+  price: number;
+  badge: string;
+  description: string;
+  includesTransportAndInstall: boolean;
+  isActive: boolean;
+}
+
+export interface DoorsPricingConfig {
+  wpc: WpcPricingConfig;
+  armored: ArmoredDoorTypeConfig[];
+  version: number;
+  updatedAt: string;
+}
 
 export interface ArmoredDoorItem {
   id: number;
@@ -132,6 +185,7 @@ export interface ArmoredDoorItem {
   unitPrice: number;
   quantity: number;
   totalPrice: number;
+  includesTransportAndInstall?: boolean;
   notes?: string;
 }
 

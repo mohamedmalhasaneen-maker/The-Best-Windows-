@@ -118,6 +118,36 @@
         "serverUpdatedAt": { "type": "string", "format": "date-time", "description": "Firestore server timestamp" }
       },
       "required": ["id", "name", "customer", "armoredDoors", "armoredTotal"]
+    },
+    "DoorsPricingConfig": {
+      "title": "DoorsPricingConfig",
+      "description": "Shared authoritative pricing catalog for WPC doors, WPC addons, and Armored doors",
+      "type": "object",
+      "properties": {
+        "wpc": {
+          "type": "object",
+          "description": "WPC doors packages, addons, and addon order"
+        },
+        "armored": {
+          "type": "array",
+          "description": "List of Armored door types, specs, prices, inclusion flags, and visibility flags"
+        },
+        "version": {
+          "type": "number",
+          "description": "Monotonically increasing revision number"
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "ISO timestamp of latest door pricing update"
+        },
+        "serverUpdatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Authoritative Firestore server timestamp"
+        }
+      },
+      "required": ["wpc", "armored", "version", "updatedAt", "serverUpdatedAt"]
     }
   },
   "firestore": {
@@ -135,7 +165,11 @@
     },
     "/settings/pricing": {
       "schema": "PricingConfig",
-      "description": "Authoritative shared pricing catalog read by all visitors and updated only by authorized admins"
+      "description": "Authoritative shared pricing catalog for UPVC profiles and addons"
+    },
+    "/settings/doors_pricing": {
+      "schema": "DoorsPricingConfig",
+      "description": "Authoritative shared pricing catalog for WPC and Armored doors read by all visitors and updated only by authorized admins"
     },
     "/admin_gate/{gateId}": {
       "schema": "AdminGate",

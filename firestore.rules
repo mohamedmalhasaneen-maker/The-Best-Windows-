@@ -173,6 +173,44 @@ service cloud.firestore {
         && (!('serverUpdatedAt' in data) || data.serverUpdatedAt is timestamp);
     }
 
+    function isValidDoorsPricingConfig(data) {
+      return data.keys().hasAll([
+          'wpc',
+          'armored',
+          'version',
+          'updatedAt',
+          'serverUpdatedAt'
+        ])
+        && data.keys().hasOnly([
+          'wpc',
+          'armored',
+          'version',
+          'updatedAt',
+          'serverUpdatedAt'
+        ])
+        && data.wpc is map
+        && data.wpc.keys().hasAll(['packages', 'addons', 'addonOrder'])
+        && data.wpc.keys().hasOnly(['packages', 'addons', 'addonOrder'])
+        && data.wpc.packages is list
+        && data.wpc.packages.size() >= 1
+        && data.wpc.packages.size() <= 100
+        && data.wpc.packages[0] is map
+        && data.wpc.addons is map
+        && data.wpc.addons.size() <= 100
+        && data.wpc.addonOrder is list
+        && data.wpc.addonOrder.size() <= 100
+        && data.armored is list
+        && data.armored.size() >= 1
+        && data.armored.size() <= 100
+        && data.armored[0] is map
+        && data.version is int
+        && data.version >= 1
+        && data.updatedAt is string
+        && data.updatedAt.size() >= 1
+        && data.updatedAt.size() <= 100
+        && data.serverUpdatedAt == request.time;
+    }
+
     // Connection health check endpoint used on boot
     match /test/connection {
       allow get: if true;
@@ -182,10 +220,10 @@ service cloud.firestore {
     // Write-only cryptographic admin verification gate (unreadable by all clients)
     match /admin_gate/{gateId} {
       allow read, delete: if false;
-      allow create: if gateId in ['auth_check', 'pricing_write']
+      allow create: if gateId in ['auth_check', 'pricing_write', 'doors_pricing_write']
         && isValidAdminGate(incoming())
         && (isBootstrappedAdmin() || hasValidPasscodeProof(incoming()));
-      allow update: if gateId in ['auth_check', 'pricing_write']
+      allow update: if gateId in ['auth_check', 'pricing_write', 'doors_pricing_write']
         && isValidAdminGate(incoming())
         && incoming().diff(existing()).affectedKeys().hasOnly(['proof', 'verifiedAt'])
         && (isBootstrappedAdmin() || hasValidPasscodeProof(incoming()));
@@ -214,6 +252,31 @@ service cloud.firestore {
         && (
           isBootstrappedAdmin()
           || getAfter(/databases/$(database)/documents/admin_gate/pricing_write).data.verifiedAt == request.time
+        );
+      allow delete: if false;
+    }
+
+    // Authoritative shared WPC & Armored doors pricing catalog, strictly isolated from PVC pricing
+    match /settings/doors_pricing {
+      allow get: if true;
+      allow list: if false;
+      allow create: if isValidDoorsPricingConfig(incoming())
+        && (
+          isBootstrappedAdmin()
+          || getAfter(/databases/$(database)/documents/admin_gate/doors_pricing_write).data.verifiedAt == request.time
+        );
+      allow update: if isValidDoorsPricingConfig(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'wpc',
+          'armored',
+          'version',
+          'updatedAt',
+          'serverUpdatedAt'
+        ])
+        && incoming().version > existing().version
+        && (
+          isBootstrappedAdmin()
+          || getAfter(/databases/$(database)/documents/admin_gate/doors_pricing_write).data.verifiedAt == request.time
         );
       allow delete: if false;
     }

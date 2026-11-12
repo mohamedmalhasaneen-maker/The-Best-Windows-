@@ -1,7 +1,7 @@
 import jspdf from 'jspdf';
 import * as htmlToImage from 'html-to-image';
 import { Addon, CalculatedItem, CalculationResult, CustomerInfo, Profile, WpcDoorItem } from '../types';
-import { calculateWpcDoorPrice, formatWpcDoorSize } from '../constants/wpcConstants';
+import { getWpcDoorDisplayData, formatWpcDoorSize } from '../constants/wpcConstants';
 import {
   ITEM_ROW_FIXED_HEIGHT,
   ItemRowAutoFit,
@@ -351,7 +351,7 @@ export function paginateQuoteIntoA4Pages(
   // Step 2: WPC Doors pagination
   for (let wIdx = 0; wIdx < wpcDoors.length; wIdx++) {
     const door = wpcDoors[wIdx];
-    const pricing = calculateWpcDoorPrice(door);
+    const pricing = getWpcDoorDisplayData(door);
     const formattedSize = formatWpcDoorSize(door);
     const rowH = WPC_ROW_FIXED_HEIGHT;
     const isFirstWpcOnPage = currentPage.wpcDoors.length === 0;
