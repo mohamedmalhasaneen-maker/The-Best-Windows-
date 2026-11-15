@@ -25,6 +25,7 @@ interface CustomersModalProps {
   onSaveCustomer: (customer: { name: string; phone: string; address?: string; notes?: string }) => Promise<void>;
   onDeleteCustomer: (id: string) => Promise<void>;
   onRefresh: () => void;
+  isOnline?: boolean;
 }
 
 export default function CustomersModal({
@@ -34,7 +35,8 @@ export default function CustomersModal({
   onSelectCustomer,
   onSaveCustomer,
   onDeleteCustomer,
-  onRefresh
+  onRefresh,
+  isOnline = true,
 }: CustomersModalProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddingNew, setIsAddingNew] = useState(false);
@@ -78,7 +80,11 @@ export default function CustomersModal({
       setAddress('');
       setNotes('');
       setIsAddingNew(false);
-      setSuccessToast('تم حفظ العميل في قاعدة البيانات بنجاح');
+      setSuccessToast(
+        isOnline
+          ? 'تم حفظ العميل في قاعدة البيانات بنجاح'
+          : 'تم حفظ العميل محلياً (ستتم المزامنة عند عودة الإنترنت)'
+      );
       setTimeout(() => setSuccessToast(null), 3000);
     } catch (err) {
       console.error(err);

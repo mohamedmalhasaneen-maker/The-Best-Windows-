@@ -401,6 +401,15 @@ function fitDetailsCell(item: CalculatedItem, profiles: Record<string, Profile>)
         marginTopPx: gapPx,
       });
     }
+    if (item.opening === 'قلاب' && item.exhaustFan === 'with') {
+      lines.push({
+        text: `شفاط: ${item.exhaustFanLocation === 'profile' ? 'في القطاع' : 'في الزجاج'}`,
+        fontPx: subPx,
+        fontWeight: 700,
+        fontFamily: 'sans',
+        marginTopPx: gapPx,
+      });
+    }
 
     const measured = measureLinesActual(lines, COL_INNER_WIDTHS.details, lh);
     if (
@@ -669,6 +678,8 @@ export function computeItemRowAutoFit(
     item.innerType || 'glass',
     item.glassType,
     item.hingePanes || '',
+    item.exhaustFan || '',
+    item.exhaustFanLocation || '',
     item.itemTotal,
     item.profilePrice,
     item.flatProfilePrice || 0,

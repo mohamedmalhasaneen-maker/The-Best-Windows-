@@ -648,6 +648,13 @@ const A4PageSheet = React.memo(function A4PageSheet({
                               ضلف: {item.hingePanes || 'ضلفة'}
                             </div>
                           )}
+                          {item.opening === 'قلاب' && item.exhaustFan === 'with' && (
+                            <div
+                              className={`text-slate-700 font-bold whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${autoFit.details.subClass}`}
+                            >
+                              شفاط: {item.exhaustFanLocation === 'profile' ? 'في القطاع' : 'في الزجاج'}
+                            </div>
+                          )}
                         </div>
                       </td>
 

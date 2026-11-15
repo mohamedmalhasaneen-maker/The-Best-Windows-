@@ -14,6 +14,7 @@ interface SavedWpcQuotesModalProps {
   currentCustomerName: string;
   formatCurrency: (val: number) => string;
   onRefresh: () => void;
+  isOnline?: boolean;
 }
 
 export default function SavedWpcQuotesModal({
@@ -26,6 +27,7 @@ export default function SavedWpcQuotesModal({
   currentCustomerName,
   formatCurrency,
   onRefresh,
+  isOnline = true,
 }: SavedWpcQuotesModalProps) {
   const [newQuoteName, setNewQuoteName] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -131,12 +133,12 @@ export default function SavedWpcQuotesModal({
                 {saveSuccess ? (
                   <>
                     <Check size={16} className="text-emerald-950" />
-                    <span>تم الحفظ!</span>
+                    <span>{isOnline ? 'تم الحفظ!' : 'حُفظ محلياً!'}</span>
                   </>
                 ) : (
                   <>
                     <Save size={16} />
-                    <span>حفظ بالسحاب</span>
+                    <span>{isOnline ? 'حفظ بالسحاب' : 'حفظ محلياً الآن'}</span>
                   </>
                 )}
               </button>

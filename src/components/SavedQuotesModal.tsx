@@ -14,6 +14,7 @@ interface SavedQuotesModalProps {
   currentCustomerName: string;
   formatCurrency: (val: number) => string;
   onRefresh: () => void;
+  isOnline?: boolean;
 }
 
 export default function SavedQuotesModal({
@@ -26,6 +27,7 @@ export default function SavedQuotesModal({
   currentCustomerName,
   formatCurrency,
   onRefresh,
+  isOnline = true,
 }: SavedQuotesModalProps) {
   const [newQuoteName, setNewQuoteName] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -149,7 +151,13 @@ export default function SavedQuotesModal({
                 }`}
               >
                 {saveSuccess ? <Check size={16} /> : <Save size={16} />}
-                <span>{saveSuccess ? 'تم الحفظ بنجاح!' : 'حفظ العرض الحالي'}</span>
+                <span>
+                  {saveSuccess
+                    ? isOnline
+                      ? 'تم الحفظ بنجاح!'
+                      : 'حُفظ محلياً (ستتم المزامنة لاحقاً)'
+                    : 'حفظ العرض الحالي'}
+                </span>
               </button>
             </form>
 

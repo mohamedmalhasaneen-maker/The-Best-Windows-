@@ -49,6 +49,8 @@ export interface QuoteItem {
   innerType?: 'glass' | 'panel' | 'panel_glass';
   glassType: string;
   hingePanes?: string;
+  exhaustFan?: 'with' | 'without';
+  exhaustFanLocation?: 'glass' | 'profile';
   addons: string[];
   quantity?: number;
   fixedPrice?: number;

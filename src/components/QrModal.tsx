@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { X, ExternalLink, QrCode } from 'lucide-react';
+import QRCode from 'qrcode';
 import { BRAND_NAME, SOCIAL_CHANNELS } from '../constants';
 import { renderSocialIcon, getSocialButtonStyle } from './SocialIcons';
 
@@ -9,6 +11,42 @@ interface QrModalProps {
 }
 
 export default function QrModal({ isOpen, onClose }: QrModalProps) {
+  const [qrMap, setQrMap] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+
+    const generateAll = async () => {
+      const entries = await Promise.all(
+        SOCIAL_CHANNELS.map(async (social) => {
+          try {
+            const dataUrl = await QRCode.toDataURL(social.url, {
+              width: 240,
+              margin: 1,
+              color: {
+                dark: '#0F172A',
+                light: '#FFFFFF',
+              },
+            });
+            return [social.id, dataUrl] as const;
+          } catch {
+            return [social.id, ''] as const;
+          }
+        })
+      );
+
+      if (!cancelled) {
+        setQrMap(Object.fromEntries(entries));
+      }
+    };
+
+    void generateAll();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   return (
@@ -69,9 +107,7 @@ export default function QrModal({ isOpen, onClose }: QrModalProps) {
           {/* 3 Official Social Platforms QR Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {SOCIAL_CHANNELS.map((social) => {
-              const qrImgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(
-                social.url
-              )}`;
+              const qrImgUrl = qrMap[social.id];
 
               return (
                 <div
@@ -83,13 +119,18 @@ export default function QrModal({ isOpen, onClose }: QrModalProps) {
                     <span>{social.nameAr}</span>
                   </div>
 
-                  <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-center">
-                    <img
-                      src={qrImgUrl}
-                      alt={`${social.name} QR Code`}
-                      className="w-32 h-32 object-contain rounded-lg"
-                      referrerPolicy="no-referrer"
-                    />
+                  <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-center min-w-[152px] min-h-[152px]">
+                    {qrImgUrl ? (
+                      <img
+                        src={qrImgUrl}
+                        alt={`${social.name} QR Code`}
+                        className="w-32 h-32 object-contain rounded-lg"
+                      />
+                    ) : (
+                      <div className="w-32 h-32 rounded-lg bg-slate-100 animate-pulse flex items-center justify-center text-slate-400">
+                        <QrCode size={28} />
+                      </div>
+                    )}
                   </div>
 
                   <a

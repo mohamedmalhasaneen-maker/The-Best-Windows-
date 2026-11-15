@@ -318,6 +318,78 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
                 </select>
               </div>
             )}
+
+            {item.opening === 'قلاب' && (
+              <>
+                <div className={item.exhaustFan === 'with' ? 'col-span-1 min-w-0' : 'col-span-2 min-w-0'}>
+                  <label className="block text-xs font-extrabold text-slate-500 mb-1.5 uppercase tracking-wider">
+                    وجود الشفاط
+                  </label>
+                  <div className="flex gap-1 bg-slate-100 p-1 rounded-xl print:hidden">
+                    <button
+                      type="button"
+                      onClick={() => updateItem(item.id, 'exhaustFan', 'with')}
+                      className={`flex-1 min-w-0 py-1.5 px-2 text-center rounded-lg font-black text-xs transition-all cursor-pointer ${
+                        item.exhaustFan === 'with'
+                          ? 'bg-[#0F172A] text-white shadow-sm'
+                          : 'hover:text-[#0F172A] text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      مع
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateItem(item.id, 'exhaustFan', 'without')}
+                      className={`flex-1 min-w-0 py-1.5 px-2 text-center rounded-lg font-black text-xs transition-all cursor-pointer ${
+                        (item.exhaustFan || 'without') === 'without'
+                          ? 'bg-[#0F172A] text-white shadow-sm'
+                          : 'hover:text-[#0F172A] text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      بدون
+                    </button>
+                  </div>
+                  <div className="hidden print:block font-bold text-slate-900">
+                    {item.exhaustFan === 'with' ? 'مع' : 'بدون'}
+                  </div>
+                </div>
+
+                {item.exhaustFan === 'with' && (
+                  <div className="col-span-1 min-w-0">
+                    <label className="block text-xs font-extrabold text-slate-500 mb-1.5 uppercase tracking-wider">
+                      مكان الشفاط
+                    </label>
+                    <div className="flex gap-1 bg-slate-100 p-1 rounded-xl print:hidden">
+                      <button
+                        type="button"
+                        onClick={() => updateItem(item.id, 'exhaustFanLocation', 'glass')}
+                        className={`flex-1 min-w-0 py-1.5 px-1.5 text-center rounded-lg font-black text-[11px] sm:text-xs transition-all cursor-pointer whitespace-nowrap ${
+                          (item.exhaustFanLocation || 'glass') === 'glass'
+                            ? 'bg-[#0F172A] text-white shadow-sm'
+                            : 'hover:text-[#0F172A] text-slate-500 hover:bg-slate-50'
+                        }`}
+                      >
+                        في الزجاج
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateItem(item.id, 'exhaustFanLocation', 'profile')}
+                        className={`flex-1 min-w-0 py-1.5 px-1.5 text-center rounded-lg font-black text-[11px] sm:text-xs transition-all cursor-pointer whitespace-nowrap ${
+                          item.exhaustFanLocation === 'profile'
+                            ? 'bg-[#0F172A] text-white shadow-sm'
+                            : 'hover:text-[#0F172A] text-slate-500 hover:bg-slate-50'
+                        }`}
+                      >
+                        في القطاع
+                      </button>
+                    </div>
+                    <div className="hidden print:block font-bold text-slate-900">
+                      {item.exhaustFanLocation === 'profile' ? 'في القطاع' : 'في الزجاج'}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
 

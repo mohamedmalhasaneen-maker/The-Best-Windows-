@@ -15,6 +15,11 @@ import { ContactSelectModal } from './ContactSelectModal';
 import { LocationsSelectModal } from './LocationsSelectModal';
 import { BRAND_NAME, SOCIAL_CHANNELS } from '../constants';
 import { renderSocialIcon, getSocialButtonStyle } from './SocialIcons';
+import {
+  PWAInstallButton,
+  ConnectionSyncBadge,
+  SaveOutcomeStatus,
+} from './PWAControls';
 
 interface HeaderProps {
   onOpenDevSettings: () => void;
@@ -22,10 +27,14 @@ interface HeaderProps {
   onToggleTheme: () => void;
   savedQuotesCount: number;
   onOpenSavedQuotes: () => void;
-  onSaveQuoteAuto: () => void;
+  onSaveQuoteAuto: () => Promise<SaveOutcomeStatus | void> | SaveOutcomeStatus | void;
   customersCount?: number;
   onOpenCustomers?: () => void;
   isPrimaryHeading?: boolean;
+  isOnline?: boolean;
+  isSyncing?: boolean;
+  pendingSyncCount?: number;
+  onSyncNow?: () => void;
 }
 
 export default function Header({
@@ -36,21 +45,26 @@ export default function Header({
   customersCount,
   onOpenCustomers,
   isPrimaryHeading = true,
+  isOnline = true,
+  isSyncing = false,
+  pendingSyncCount = 0,
+  onSyncNow,
 }: HeaderProps) {
-  const [justSaved, setJustSaved] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'cloud' | 'local'>('idle');
   const [contactModalType, setContactModalType] = useState<'phone' | 'whatsapp' | 'all' | null>(
     null
   );
   const [isLocationsModalOpen, setIsLocationsModalOpen] = useState(false);
 
-  const handleAutoSave = () => {
-    onSaveQuoteAuto();
-    setJustSaved(true);
+  const handleAutoSave = async () => {
+    const result = await onSaveQuoteAuto();
+    setSaveState(result === 'local-offline' || result === 'local-error' || !isOnline ? 'local' : 'cloud');
     setTimeout(() => {
-      setJustSaved(false);
-    }, 2000);
+      setSaveState('idle');
+    }, 2400);
   };
 
+  const justSaved = saveState !== 'idle';
   const BrandHeadingTag = isPrimaryHeading ? 'h1' : 'div';
 
   return (
@@ -85,13 +99,24 @@ export default function Header({
             animate={{ opacity: 1, scale: 1 }}
             className="flex flex-wrap items-center gap-2 text-right justify-start lg:justify-end"
           >
+            {/* Network & Pending Sync Badge + App Install Button */}
+            <ConnectionSyncBadge
+              isOnline={isOnline}
+              isSyncing={isSyncing}
+              pendingSyncCount={pendingSyncCount}
+              onSyncNow={onSyncNow}
+            />
+            <PWAInstallButton />
+
             {/* Save current Quote button */}
             <button
               type="button"
-              onClick={handleAutoSave}
+              onClick={() => void handleAutoSave()}
               disabled={justSaved}
               className={`${
-                justSaved
+                saveState === 'local'
+                  ? 'bg-amber-600 hover:bg-amber-700'
+                  : justSaved
                   ? 'bg-teal-600 hover:bg-teal-700'
                   : 'bg-emerald-600 hover:bg-emerald-700'
               } text-white font-extrabold text-xs px-3.5 py-2.5 rounded-xl transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer shadow-md whitespace-nowrap`}
@@ -100,7 +125,7 @@ export default function Header({
               {justSaved ? (
                 <>
                   <Check size={14} className="text-white" />
-                  <span>تم حفظ العرض</span>
+                  <span>{saveState === 'local' ? 'حُفظ محلياً (بانتظار الإنترنت)' : 'تم حفظ العرض'}</span>
                 </>
               ) : (
                 <>

@@ -33,18 +33,21 @@ import {
   calculateArmoredQuoteTotal,
 } from '../constants/armoredConstants';
 
+import type { SaveOutcomeStatus } from './PWAControls';
+
 interface ArmoredDoorsSectionProps {
   armoredDoors: ArmoredDoorItem[];
   armoredTypes?: ArmoredDoorTypeConfig[];
   pricingSyncStatus?: 'loading' | 'synced' | 'error';
   pricingErrorText?: string | null;
+  isOnline?: boolean;
   onRetryLoadPricing?: () => void;
   onAddDoor: (door: ArmoredDoorItem) => void;
   onUpdateDoor: (id: number, door: Partial<ArmoredDoorItem>) => void;
   onRemoveDoor: (id: number) => void;
   onDuplicateDoor: (door: ArmoredDoorItem) => void;
   formatCurrency: (value: number) => string;
-  onSaveQuoteAuto: () => void;
+  onSaveQuoteAuto: () => Promise<SaveOutcomeStatus | void> | SaveOutcomeStatus | void;
   onNavigateNext: () => void;
 }
 
@@ -53,6 +56,7 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
   armoredTypes = DEFAULT_ARMORED_DOOR_TYPES,
   pricingSyncStatus = 'synced',
   pricingErrorText = null,
+  isOnline = true,
   onRetryLoadPricing,
   onAddDoor,
   onUpdateDoor,
@@ -77,7 +81,8 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
   );
   const [quantity, setQuantity] = useState<number>(1);
   const [notes, setNotes] = useState('');
-  const [justSavedQuote, setJustSavedQuote] = useState(false);
+  const [saveFeedbackState, setSaveFeedbackState] = useState<'idle' | 'cloud' | 'local'>('idle');
+  const justSavedQuote = saveFeedbackState !== 'idle';
 
   // Ensure selected manufactureType stays valid if active types change while creating a new item
   const effectiveManufactureType =
@@ -123,7 +128,7 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
 
   const handleSubmitDoor = (e: React.FormEvent) => {
     e.preventDefault();
-    if (pricingSyncStatus === 'error') {
+    if (pricingSyncStatus === 'error' && isOnline) {
       return;
     }
 
@@ -156,10 +161,12 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
     resetForm();
   };
 
-  const handleTriggerSaveQuote = () => {
-    onSaveQuoteAuto();
-    setJustSavedQuote(true);
-    setTimeout(() => setJustSavedQuote(false), 2200);
+  const handleTriggerSaveQuote = async () => {
+    const status = await onSaveQuoteAuto();
+    setSaveFeedbackState(
+      status === 'local-offline' || status === 'local-error' || !isOnline ? 'local' : 'cloud'
+    );
+    setTimeout(() => setSaveFeedbackState('idle'), 2400);
   };
 
   const totalDoorsCount = armoredDoors.reduce((sum, d) => sum + (d.quantity || 1), 0);
@@ -167,8 +174,8 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
 
   return (
     <div className="w-full space-y-8" dir="rtl">
-      {/* DB Error Alert (Never silently fall back if database pricing failed to load) */}
-      {pricingSyncStatus === 'error' && (
+      {/* DB Error Alert (Allow offline operation with local cached catalog, block only on unrecovered online DB error) */}
+      {pricingSyncStatus === 'error' && isOnline && (
         <div
           role="alert"
           className="bg-rose-50 border-2 border-rose-300 text-rose-900 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm"
@@ -493,7 +500,7 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
           <div className="flex justify-end pt-2">
             <button
               type="submit"
-              disabled={pricingSyncStatus === 'error'}
+              disabled={pricingSyncStatus === 'error' && isOnline}
               className="w-full sm:w-auto min-h-[48px] px-8 py-3.5 bg-[#0F172A] hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed text-[#FACC15] font-black text-base rounded-2xl flex items-center justify-center gap-2.5 shadow-lg active:scale-95 transition cursor-pointer"
             >
               {editingId ? <Check size={20} /> : <Plus size={20} />}
@@ -659,16 +666,24 @@ export const ArmoredDoorsSection: React.FC<ArmoredDoorsSectionProps> = ({
 
           <button
             type="button"
-            onClick={handleTriggerSaveQuote}
+            onClick={() => void handleTriggerSaveQuote()}
             disabled={justSavedQuote}
             className={`min-h-[48px] px-5 py-3 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer shadow-md ${
-              justSavedQuote
+              saveFeedbackState === 'local'
+                ? 'bg-amber-600 text-white'
+                : justSavedQuote
                 ? 'bg-teal-600 text-white'
                 : 'bg-emerald-600 hover:bg-emerald-700 text-white'
             }`}
           >
             {justSavedQuote ? <Check size={18} /> : <Save size={18} />}
-            <span>{justSavedQuote ? 'تم حفظ العرض!' : 'حفظ عرض السعر'}</span>
+            <span>
+              {saveFeedbackState === 'local'
+                ? 'حُفظ محلياً (بانتظار الإنترنت)'
+                : justSavedQuote
+                ? 'تم حفظ العرض!'
+                : 'حفظ عرض السعر'}
+            </span>
           </button>
 
           <button

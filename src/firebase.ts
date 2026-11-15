@@ -3,6 +3,8 @@ import { getAuth } from 'firebase/auth';
 import {
   getFirestore,
   initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   collection,
   doc,
   setDoc,
@@ -43,28 +45,43 @@ const dbId =
     ? firebaseConfig.firestoreDatabaseId
     : undefined;
 
-// Use experimentalAutoDetectLongPolling so modern browsers use fast HTTP/2 streams
-// and only fall back to XHR long-polling when a proxy/iframe requires it
+// Enable Firestore persistent IndexedDB cache across tabs while keeping experimentalAutoDetectLongPolling
 let firestoreDb;
 try {
   firestoreDb = initializeFirestore(
     app,
     {
       experimentalAutoDetectLongPolling: true,
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager(),
+      }),
     },
     dbId
   );
 } catch (e) {
-  firestoreDb = getFirestore(app, dbId);
+  try {
+    firestoreDb = initializeFirestore(
+      app,
+      {
+        experimentalAutoDetectLongPolling: true,
+      },
+      dbId
+    );
+  } catch {
+    firestoreDb = getFirestore(app, dbId);
+  }
 }
 export const db = firestoreDb;
 
 async function testConnection() {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return;
+  }
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
+      console.warn('Firestore client temporarily offline.');
     }
   }
 }

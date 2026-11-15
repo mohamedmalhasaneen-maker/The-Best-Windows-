@@ -417,6 +417,36 @@ export const DynamicPreview: React.FC<DynamicPreviewProps> = ({ item }) => {
 
           {/* Top latched ventilation toggle */}
           <rect x={paneX + (paneW / 2) - 4} y={paneY + 4} width="8" height="2" fill="#64748B" rx="0.5" />
+
+          {/* Exhaust fan subtle indicator when selected */}
+          {item.exhaustFan === 'with' && (() => {
+            const fanR = Math.max(5, Math.min(12, Math.min(paneW, paneH) * 0.18));
+            const fanCx = paneX + paneW / 2;
+            const fanCy =
+              item.exhaustFanLocation === 'profile'
+                ? paneY + fanR + 9
+                : paneY + paneH / 2;
+            return (
+              <g opacity="0.85">
+                {item.exhaustFanLocation === 'profile' && (
+                  <rect
+                    x={fanCx - fanR - 3}
+                    y={fanCy - fanR - 3}
+                    width={(fanR + 3) * 2}
+                    height={(fanR + 3) * 2}
+                    rx="2"
+                    fill="#F8FAFC"
+                    stroke="#475569"
+                    strokeWidth="0.9"
+                  />
+                )}
+                <circle cx={fanCx} cy={fanCy} r={fanR} fill="rgba(248, 250, 252, 0.85)" stroke="#334155" strokeWidth="1" />
+                <circle cx={fanCx} cy={fanCy} r={Math.max(1.8, fanR * 0.22)} fill="#F59E0B" />
+                <line x1={fanCx - fanR * 0.65} y1={fanCy} x2={fanCx + fanR * 0.65} y2={fanCy} stroke="#475569" strokeWidth="1" />
+                <line x1={fanCx} y1={fanCy - fanR * 0.65} x2={fanCx} y2={fanCy + fanR * 0.65} stroke="#475569" strokeWidth="1" />
+              </g>
+            );
+          })()}
         </g>
       );
     } else {
@@ -628,6 +658,11 @@ export const DynamicPreview: React.FC<DynamicPreviewProps> = ({ item }) => {
         <div className="flex flex-col">
           <span className="text-slate-400 font-bold">الفتح والنوع:</span>
           <span className="font-extrabold text-[#0F172A]">{opening} - {isDoor ? 'باب' : isBalcony ? 'بلكونة' : 'شباك'}</span>
+          {opening === 'قلاب' && item.exhaustFan === 'with' && (
+            <span className="text-[9.5px] font-bold text-amber-700 mt-0.5">
+              مع شفاط ({item.exhaustFanLocation === 'profile' ? 'في القطاع' : 'في الزجاج'})
+            </span>
+          )}
         </div>
         <div className="flex flex-col text-left">
           <span className="text-slate-400 font-bold">الجزء الداخلي:</span>

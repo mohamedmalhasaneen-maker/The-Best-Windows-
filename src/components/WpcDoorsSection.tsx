@@ -39,6 +39,7 @@ interface WpcDoorsSectionProps {
   wpcPricing?: WpcPricingConfig;
   pricingSyncStatus?: 'loading' | 'synced' | 'error';
   pricingErrorText?: string | null;
+  isOnline?: boolean;
   onRetryLoadPricing?: () => void;
   onAddDoor: (door: WpcDoorItem) => void;
   onUpdateDoor: (id: number, door: Partial<WpcDoorItem>) => void;
@@ -54,6 +55,7 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
   wpcPricing = DEFAULT_WPC_PRICING_CONFIG,
   pricingSyncStatus = 'synced',
   pricingErrorText = null,
+  isOnline = true,
   onRetryLoadPricing,
   onAddDoor,
   onUpdateDoor,
@@ -217,7 +219,7 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
   // Submit / save door
   const handleSubmitDoor = (e: React.FormEvent) => {
     e.preventDefault();
-    if (pricingSyncStatus === 'error') {
+    if (pricingSyncStatus === 'error' && isOnline) {
       return;
     }
 
@@ -281,7 +283,7 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
   return (
     <div className="w-full space-y-8" dir="rtl">
       {/* DB Error Alert */}
-      {pricingSyncStatus === 'error' && (
+      {pricingSyncStatus === 'error' && isOnline && (
         <div
           role="alert"
           className="bg-rose-50 border-2 border-rose-300 text-rose-900 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm"
@@ -917,7 +919,7 @@ export const WpcDoorsSection: React.FC<WpcDoorsSectionProps> = ({
           <div className="flex justify-end pt-2">
             <button
               type="submit"
-              disabled={pricingSyncStatus === 'error'}
+              disabled={pricingSyncStatus === 'error' && isOnline}
               className="w-full sm:w-auto min-h-[48px] px-8 py-3.5 bg-[#0F172A] hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed text-[#FACC15] font-black text-base rounded-2xl flex items-center justify-center gap-2.5 shadow-lg active:scale-95 transition cursor-pointer"
             >
               {editingId ? <Check size={20} /> : <Plus size={20} />}

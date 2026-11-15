@@ -13,6 +13,7 @@ interface SavedArmoredQuotesModalProps {
   currentCustomerName: string;
   formatCurrency: (val: number) => string;
   onRefresh: () => void;
+  isOnline?: boolean;
 }
 
 export default function SavedArmoredQuotesModal({
@@ -25,6 +26,7 @@ export default function SavedArmoredQuotesModal({
   currentCustomerName,
   formatCurrency,
   onRefresh,
+  isOnline = true,
 }: SavedArmoredQuotesModalProps) {
   const [newQuoteName, setNewQuoteName] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -126,12 +128,12 @@ export default function SavedArmoredQuotesModal({
                 {saveSuccess ? (
                   <>
                     <Check size={16} className="text-emerald-950" />
-                    <span>تم الحفظ!</span>
+                    <span>{isOnline ? 'تم الحفظ!' : 'حُفظ محلياً!'}</span>
                   </>
                 ) : (
                   <>
                     <Save size={16} />
-                    <span>حفظ بالسحاب</span>
+                    <span>{isOnline ? 'حفظ بالسحاب' : 'حفظ محلياً الآن'}</span>
                   </>
                 )}
               </button>

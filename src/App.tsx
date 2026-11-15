@@ -74,6 +74,31 @@ import CustomersModal from './components/CustomersModal';
 import PasswordModal from './components/PasswordModal';
 import { WpcDoorsSection } from './components/WpcDoorsSection';
 import { ArmoredDoorsSection } from './components/ArmoredDoorsSection';
+import { useOnlineStatus, useServiceWorkerUpdater } from './hooks/usePWA';
+import {
+  SaveFeedbackToast,
+  type SaveFeedbackNotice,
+  type SaveOutcomeStatus,
+} from './components/PWAControls';
+import {
+  deleteOfflineRecord,
+  enqueueSyncOp,
+  flushSyncQueue,
+  getAllSyncOps,
+  getDoorsPricingCache,
+  getOfflineDraft,
+  getOfflineRecords,
+  getPricingCache,
+  mergeRecordsWithPendingQueue,
+  migrateLegacyLocalStorageToIndexedDb,
+  putOfflineRecord,
+  removeSyncOp,
+  replaceOfflineRecords,
+  saveDoorsPricingCache,
+  saveOfflineDraft,
+  savePricingCache,
+  type SyncQueueExecutor,
+} from './utils/offlineDb';
 
 const formatCurrency = (value: number) => {
   return (
@@ -84,6 +109,25 @@ const formatCurrency = (value: number) => {
 };
 
 export default function App() {
+  const isOnline = useOnlineStatus();
+  useServiceWorkerUpdater(isOnline);
+
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [saveNotice, setSaveNotice] = useState<SaveFeedbackNotice | null>(null);
+  const hasHydratedIdbRef = useRef(false);
+  const pvcDraftEditedRef = useRef(false);
+  const wpcDraftEditedRef = useRef(false);
+  const armoredDraftEditedRef = useRef(false);
+
+  const showSaveNotice = useCallback((status: SaveOutcomeStatus, message: string) => {
+    const id = Date.now();
+    setSaveNotice({ id, status, message });
+    window.setTimeout(() => {
+      setSaveNotice((prev) => (prev && prev.id === id ? null : prev));
+    }, 3800);
+  }, []);
+
   const [activeSystem, setActiveSystem] = useState<'pvc' | 'wpc' | 'armored'>('pvc');
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const [isDevModalOpen, setIsDevModalOpen] = useState(false);
@@ -268,6 +312,10 @@ export default function App() {
     setPricingSyncStatus('synced');
     setPricingErrorText(null);
 
+    if (config.version > 0) {
+      void savePricingCache(config);
+    }
+
     // Keep active draft items valid if a profile or addon was removed, unless viewing a historical quote snapshot
     if (!loadedQuotePricingRef.current) {
       const fallbackProfile = Object.keys(config.profiles)[0] || 'newline';
@@ -293,6 +341,17 @@ export default function App() {
       }
     } catch (err) {
       console.warn('[Pricing] Could not fetch authoritative pricing from Firestore:', err);
+      const cached = await getPricingCache();
+      if (cached && cached.data && Object.keys(cached.data.profiles || {}).length > 0) {
+        applyConfirmedPricing(cached.data);
+        return;
+      }
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        // Offline with no prior cached version yet: permit built-in baseline specs so offline mode works
+        setPricingSyncStatus('synced');
+        setPricingErrorText(null);
+        return;
+      }
       if (pricingVersionRef.current === 0) {
         setPricingSyncStatus('error');
         setPricingErrorText(
@@ -310,6 +369,10 @@ export default function App() {
     setDoorsPricing(config);
     setDoorsPricingSyncStatus('synced');
     setDoorsPricingErrorText(null);
+
+    if (config.version > 0) {
+      void saveDoorsPricingCache(config);
+    }
   }, []);
 
   const loadLatestDoorsPricingFromServer = useCallback(async () => {
@@ -324,6 +387,16 @@ export default function App() {
       }
     } catch (err) {
       console.warn('[DoorsPricing] Could not fetch authoritative doors pricing:', err);
+      const cached = await getDoorsPricingCache();
+      if (cached && cached.data && Array.isArray(cached.data.armored)) {
+        applyConfirmedDoorsPricing(cached.data);
+        return;
+      }
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        setDoorsPricingSyncStatus('synced');
+        setDoorsPricingErrorText(null);
+        return;
+      }
       if (doorsPricingVersionRef.current === 0) {
         setDoorsPricingSyncStatus('error');
         setDoorsPricingErrorText(
@@ -340,16 +413,25 @@ export default function App() {
       localStorage.removeItem('almekawy_custom_addons');
     } catch {}
 
-    loadLatestPricingFromServer();
-    loadLatestDoorsPricingFromServer();
+    // Pre-hydrate cached authoritative pricing immediately from IndexedDB so offline startups are instant
+    void (async () => {
+      const [cachedPvc, cachedDoors] = await Promise.all([
+        getPricingCache(),
+        getDoorsPricingCache(),
+      ]);
+      if (cachedPvc?.data && pricingVersionRef.current === 0) {
+        applyConfirmedPricing(cachedPvc.data);
+      }
+      if (cachedDoors?.data && doorsPricingVersionRef.current === 0) {
+        applyConfirmedDoorsPricing(cachedDoors.data);
+      }
+      void loadLatestPricingFromServer();
+      void loadLatestDoorsPricingFromServer();
+    })();
 
     const handleOnline = () => {
-      if (pricingVersionRef.current === 0) {
-        void loadLatestPricingFromServer();
-      }
-      if (doorsPricingVersionRef.current === 0) {
-        void loadLatestDoorsPricingFromServer();
-      }
+      void loadLatestPricingFromServer();
+      void loadLatestDoorsPricingFromServer();
     };
     window.addEventListener('online', handleOnline);
 
@@ -358,7 +440,7 @@ export default function App() {
         applyConfirmedPricing(livePricing);
       },
       () => {
-        if (pricingVersionRef.current === 0) {
+        if (pricingVersionRef.current === 0 && navigator.onLine) {
           setPricingSyncStatus('error');
           setPricingErrorText(
             'تعذر الاتصال بقاعدة البيانات لتحميل أحدث الأسعار المعتمدة — الأسعار الاحتياطية المعروضة حالياً غير مؤكدة.'
@@ -372,7 +454,7 @@ export default function App() {
         applyConfirmedDoorsPricing(liveDoorsPricing);
       },
       () => {
-        if (doorsPricingVersionRef.current === 0) {
+        if (doorsPricingVersionRef.current === 0 && navigator.onLine) {
           setDoorsPricingSyncStatus('error');
           setDoorsPricingErrorText(
             'تعذر الاتصال بقاعدة البيانات لتحميل أحدث أسعار أبواب WPC والأبواب المصفحة.'
@@ -393,14 +475,65 @@ export default function App() {
     loadLatestDoorsPricingFromServer,
   ]);
 
-  const fetchCustomersFromAllSources = async () => {
+  const refreshPendingSyncCount = useCallback(async () => {
+    const ops = await getAllSyncOps();
+    setPendingSyncCount(ops.length);
+    return ops;
+  }, []);
+
+  const mergeAndPersistEntityList = useCallback(
+    async <T extends { id: string }>(
+      entityType: 'quote' | 'wpc_quote' | 'armored_quote' | 'customer',
+      cloudRecords: T[],
+      localRecords: T[],
+      localStorageKey: string,
+      setter: (items: T[]) => void
+    ) => {
+      const pendingOps = await getAllSyncOps();
+      const merged = mergeRecordsWithPendingQueue(
+        cloudRecords,
+        localRecords,
+        pendingOps,
+        entityType
+      );
+      setter(merged);
+      await replaceOfflineRecords(entityType, merged);
+      try {
+        localStorage.setItem(localStorageKey, JSON.stringify(merged));
+      } catch {}
+    },
+    []
+  );
+
+  const savedQuotesRef = useRef(savedQuotes);
+  const savedWpcQuotesRef = useRef(savedWpcQuotes);
+  const savedArmoredQuotesRef = useRef(savedArmoredQuotes);
+  const savedCustomersRef = useRef(savedCustomers);
+  useEffect(() => {
+    savedQuotesRef.current = savedQuotes;
+  }, [savedQuotes]);
+  useEffect(() => {
+    savedWpcQuotesRef.current = savedWpcQuotes;
+  }, [savedWpcQuotes]);
+  useEffect(() => {
+    savedArmoredQuotesRef.current = savedArmoredQuotes;
+  }, [savedArmoredQuotes]);
+  useEffect(() => {
+    savedCustomersRef.current = savedCustomers;
+  }, [savedCustomers]);
+
+  const fetchCustomersFromAllSources = useCallback(async () => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     try {
       const cloudCust = await fetchCustomersFromCloud();
       if (cloudCust && cloudCust.length > 0) {
-        setSavedCustomers(cloudCust);
-        try {
-          localStorage.setItem('almekawy_saved_customers', JSON.stringify(cloudCust));
-        } catch (e) {}
+        await mergeAndPersistEntityList(
+          'customer',
+          cloudCust,
+          savedCustomersRef.current,
+          'almekawy_saved_customers',
+          setSavedCustomers
+        );
         return;
       }
     } catch (err) {
@@ -411,20 +544,24 @@ export default function App() {
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
-          setSavedCustomers(data);
-          try {
-            localStorage.setItem('almekawy_saved_customers', JSON.stringify(data));
-          } catch (e) {}
+          void mergeAndPersistEntityList(
+            'customer',
+            data,
+            savedCustomersRef.current,
+            'almekawy_saved_customers',
+            setSavedCustomers
+          );
         }
       })
       .catch((err) => {
         console.warn('Error loading customers from backend:', err);
       });
-  };
+  }, [mergeAndPersistEntityList]);
 
   const syncCustomersFromQuotesList = (quotes: SavedQuote[], currentCustList?: SavedCustomer[]) => {
     if (!Array.isArray(quotes) || quotes.length === 0) return;
-    const existingList = currentCustList || savedCustomers;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    const existingList = currentCustList || savedCustomersRef.current;
     const knownKeys = new Set(
       existingList.map((c) => {
         const cleanDigits = normalizePhoneNumber(c.phone);
@@ -455,15 +592,19 @@ export default function App() {
     }
   };
 
-  const fetchQuotesFromAllSources = async () => {
+  const fetchQuotesFromAllSources = useCallback(async () => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     try {
       const cloudQuotes = await fetchQuotesFromCloud();
       if (cloudQuotes && cloudQuotes.length > 0) {
-        setSavedQuotes(cloudQuotes);
+        await mergeAndPersistEntityList(
+          'quote',
+          cloudQuotes,
+          savedQuotesRef.current,
+          'almekawy_saved_quotes',
+          setSavedQuotes
+        );
         syncCustomersFromQuotesList(cloudQuotes);
-        try {
-          localStorage.setItem('almekawy_saved_quotes', JSON.stringify(cloudQuotes));
-        } catch (e) {}
         return;
       }
     } catch (err) {
@@ -475,17 +616,191 @@ export default function App() {
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
-          setSavedQuotes(data);
+          void mergeAndPersistEntityList(
+            'quote',
+            data,
+            savedQuotesRef.current,
+            'almekawy_saved_quotes',
+            setSavedQuotes
+          );
           syncCustomersFromQuotesList(data);
-          try {
-            localStorage.setItem('almekawy_saved_quotes', JSON.stringify(data));
-          } catch (e) {}
         }
       })
       .catch((err) => {
         console.error('Error loading quotes from server:', err);
       });
-  };
+  }, [mergeAndPersistEntityList]);
+
+  // One-time IndexedDB hydration + legacy localStorage migration
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      await migrateLegacyLocalStorageToIndexedDb();
+      const [
+        idbQuotes,
+        idbWpcQuotes,
+        idbArmoredQuotes,
+        idbCustomers,
+        pvcDraft,
+        wpcDraft,
+        armoredDraft,
+        ops,
+      ] = await Promise.all([
+        getOfflineRecords<SavedQuote>('quote'),
+        getOfflineRecords<SavedWpcQuote>('wpc_quote'),
+        getOfflineRecords<SavedArmoredQuote>('armored_quote'),
+        getOfflineRecords<SavedCustomer>('customer'),
+        getOfflineDraft<{ key: 'pvc_draft'; customer: CustomerInfo; items: QuoteItem[]; updatedAt: number }>('pvc_draft'),
+        getOfflineDraft<{ key: 'wpc_draft'; customer: CustomerInfo; doors: WpcDoorItem[]; updatedAt: number }>('wpc_draft'),
+        getOfflineDraft<{ key: 'armored_draft'; customer: CustomerInfo; doors: ArmoredDoorItem[]; updatedAt: number }>('armored_draft'),
+        getAllSyncOps(),
+      ]);
+
+      if (!active) return;
+
+      if (idbQuotes.length > 0) {
+        setSavedQuotes(mergeRecordsWithPendingQueue(idbQuotes, idbQuotes, ops, 'quote'));
+      }
+      if (idbWpcQuotes.length > 0) {
+        setSavedWpcQuotes(mergeRecordsWithPendingQueue(idbWpcQuotes, idbWpcQuotes, ops, 'wpc_quote'));
+      }
+      if (idbArmoredQuotes.length > 0) {
+        setSavedArmoredQuotes(
+          mergeRecordsWithPendingQueue(idbArmoredQuotes, idbArmoredQuotes, ops, 'armored_quote')
+        );
+      }
+      if (idbCustomers.length > 0) {
+        setSavedCustomers(mergeRecordsWithPendingQueue(idbCustomers, idbCustomers, ops, 'customer'));
+      }
+
+      if (pvcDraft && !pvcDraftEditedRef.current) {
+        if (pvcDraft.customer) setCustomer(pvcDraft.customer);
+        if (Array.isArray(pvcDraft.items) && pvcDraft.items.length > 0) {
+          setItems(pvcDraft.items);
+        }
+      }
+      if (wpcDraft && !wpcDraftEditedRef.current) {
+        if (wpcDraft.customer) setWpcCustomer(wpcDraft.customer);
+        if (Array.isArray(wpcDraft.doors)) setWpcDoors(wpcDraft.doors);
+      }
+      if (armoredDraft && !armoredDraftEditedRef.current) {
+        if (armoredDraft.customer) setArmoredCustomer(armoredDraft.customer);
+        if (Array.isArray(armoredDraft.doors)) setArmoredDoors(armoredDraft.doors);
+      }
+
+      setPendingSyncCount(ops.length);
+      hasHydratedIdbRef.current = true;
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Persist active PVC / WPC / Armored workspace drafts to IndexedDB whenever edited
+  useEffect(() => {
+    if (!hasHydratedIdbRef.current && !pvcDraftEditedRef.current) return;
+    void saveOfflineDraft({
+      key: 'pvc_draft',
+      customer,
+      items,
+      updatedAt: Date.now(),
+    });
+  }, [customer, items]);
+
+  useEffect(() => {
+    if (!hasHydratedIdbRef.current && !wpcDraftEditedRef.current) return;
+    void saveOfflineDraft({
+      key: 'wpc_draft',
+      customer: wpcCustomer,
+      doors: wpcDoors,
+      updatedAt: Date.now(),
+    });
+  }, [wpcCustomer, wpcDoors]);
+
+  useEffect(() => {
+    if (!hasHydratedIdbRef.current && !armoredDraftEditedRef.current) return;
+    void saveOfflineDraft({
+      key: 'armored_draft',
+      customer: armoredCustomer,
+      doors: armoredDoors,
+      updatedAt: Date.now(),
+    });
+  }, [armoredCustomer, armoredDoors]);
+
+  const syncQueueExecutor = useMemo<SyncQueueExecutor>(
+    () => ({
+      saveQuote: async (q) => {
+        await saveQuoteToCloud(q);
+        fetch('/api/quotes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(q),
+        }).catch(() => {});
+      },
+      deleteQuote: async (id) => {
+        await deleteQuoteFromCloud(id);
+        fetch(`/api/quotes/${id}`, { method: 'DELETE' }).catch(() => {});
+      },
+      saveWpcQuote: async (q) => {
+        await saveWpcQuoteToCloud(q);
+      },
+      deleteWpcQuote: async (id) => {
+        await deleteWpcQuoteFromCloud(id);
+      },
+      saveArmoredQuote: async (q) => {
+        await saveArmoredQuoteToCloud(q);
+      },
+      deleteArmoredQuote: async (id) => {
+        await deleteArmoredQuoteFromCloud(id);
+      },
+      saveCustomer: async (c) => {
+        const saved = await saveCustomerToCloud(c);
+        fetch('/api/customers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(saved),
+        }).catch(() => {});
+        return saved;
+      },
+      deleteCustomer: async (id) => {
+        await deleteCustomerFromCloud(id);
+        fetch(`/api/customers/${id}`, { method: 'DELETE' }).catch(() => {});
+      },
+    }),
+    []
+  );
+
+  const runSyncFlush = useCallback(async () => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      await refreshPendingSyncCount();
+      return;
+    }
+    const existingOps = await getAllSyncOps();
+    if (existingOps.length === 0) {
+      setPendingSyncCount(0);
+      return;
+    }
+
+    setIsSyncing(true);
+    try {
+      const result = await flushSyncQueue(syncQueueExecutor);
+      setPendingSyncCount(result.remaining);
+      if (result.succeeded > 0 && result.remaining === 0) {
+        showSaveNotice(
+          'cloud',
+          `تمت مزامنة ${result.succeeded} ${result.succeeded === 1 ? 'عملية' : 'عمليات'} محفوظة محلياً مع السحابة بنجاح.`
+        );
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [refreshPendingSyncCount, showSaveNotice, syncQueueExecutor]);
+
+  useEffect(() => {
+    if (isOnline) {
+      void runSyncFlush();
+    }
+  }, [isOnline, runSyncFlush]);
 
   useEffect(() => {
     let unsubscribeQuotes: (() => void) | undefined;
@@ -497,46 +812,58 @@ export default function App() {
     const initTimer = window.setTimeout(() => {
       unsubscribeQuotes = subscribeToQuotes((liveQuotes) => {
         if (liveQuotes && liveQuotes.length > 0) {
-          setSavedQuotes(liveQuotes);
+          void mergeAndPersistEntityList(
+            'quote',
+            liveQuotes,
+            savedQuotesRef.current,
+            'almekawy_saved_quotes',
+            setSavedQuotes
+          );
           syncCustomersFromQuotesList(liveQuotes);
-          try {
-            localStorage.setItem('almekawy_saved_quotes', JSON.stringify(liveQuotes));
-          } catch (e) {}
         } else {
-          fetchQuotesFromAllSources();
+          void fetchQuotesFromAllSources();
         }
       });
 
       unsubscribeWpcQuotes = subscribeToWpcQuotes((liveQuotes) => {
         if (liveQuotes && liveQuotes.length > 0) {
-          setSavedWpcQuotes(liveQuotes);
-          try {
-            localStorage.setItem('almekawy_saved_wpc_quotes', JSON.stringify(liveQuotes));
-          } catch (e) {}
+          void mergeAndPersistEntityList(
+            'wpc_quote',
+            liveQuotes,
+            savedWpcQuotesRef.current,
+            'almekawy_saved_wpc_quotes',
+            setSavedWpcQuotes
+          );
         } else {
-          fetchWpcQuotesFromAllSources();
+          void fetchWpcQuotesFromAllSources();
         }
       });
 
       unsubscribeArmoredQuotes = subscribeToArmoredQuotes((liveQuotes) => {
         if (liveQuotes && liveQuotes.length > 0) {
-          setSavedArmoredQuotes(liveQuotes);
-          try {
-            localStorage.setItem('almekawy_saved_armored_quotes', JSON.stringify(liveQuotes));
-          } catch (e) {}
+          void mergeAndPersistEntityList(
+            'armored_quote',
+            liveQuotes,
+            savedArmoredQuotesRef.current,
+            'almekawy_saved_armored_quotes',
+            setSavedArmoredQuotes
+          );
         } else {
-          fetchArmoredQuotesFromAllSources();
+          void fetchArmoredQuotesFromAllSources();
         }
       });
 
       unsubscribeCustomers = subscribeToCustomers((liveCustomers) => {
         if (liveCustomers && liveCustomers.length > 0) {
-          setSavedCustomers(liveCustomers);
-          try {
-            localStorage.setItem('almekawy_saved_customers', JSON.stringify(liveCustomers));
-          } catch (e) {}
+          void mergeAndPersistEntityList(
+            'customer',
+            liveCustomers,
+            savedCustomersRef.current,
+            'almekawy_saved_customers',
+            setSavedCustomers
+          );
         } else {
-          fetchCustomersFromAllSources();
+          void fetchCustomersFromAllSources();
         }
       });
     }, 400);
@@ -548,19 +875,19 @@ export default function App() {
       if (typeof unsubscribeArmoredQuotes === 'function') unsubscribeArmoredQuotes();
       if (typeof unsubscribeCustomers === 'function') unsubscribeCustomers();
     };
-  }, []);
+  }, [fetchCustomersFromAllSources, fetchQuotesFromAllSources, mergeAndPersistEntityList]);
 
   useEffect(() => {
     if (isSavedQuotesModalOpen) {
-      fetchQuotesFromAllSources();
+      void fetchQuotesFromAllSources();
     }
-  }, [isSavedQuotesModalOpen]);
+  }, [isSavedQuotesModalOpen, fetchQuotesFromAllSources]);
 
   useEffect(() => {
     if (isCustomersModalOpen) {
-      fetchCustomersFromAllSources();
+      void fetchCustomersFromAllSources();
     }
-  }, [isCustomersModalOpen]);
+  }, [isCustomersModalOpen, fetchCustomersFromAllSources]);
 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     try {
@@ -692,6 +1019,7 @@ export default function App() {
   };
 
   const addNewItem = () => {
+    pvcDraftEditedRef.current = true;
     setActiveMainTab('input');
     const defaultProfile = Object.keys(effectiveProfiles)[0] || 'newline';
     const newId = Date.now();
@@ -715,6 +1043,7 @@ export default function App() {
   };
 
   const handleDuplicateItem = (itemToDuplicate: QuoteItem) => {
+    pvcDraftEditedRef.current = true;
     setActiveMainTab('input');
     const newId = Date.now();
     const newItem: QuoteItem = {
@@ -726,6 +1055,7 @@ export default function App() {
   };
 
   const removeItem = (id: number) => {
+    pvcDraftEditedRef.current = true;
     setItems((prev) => {
       const remaining = prev.filter((item) => item.id !== id);
       if (remaining.length === 0) {
@@ -752,10 +1082,11 @@ export default function App() {
   };
 
   const updateItem = (id: number, field: string, value: any) => {
-    setItems(
-      items.map((item) => {
+    pvcDraftEditedRef.current = true;
+    setItems((prevItems) =>
+      prevItems.map((item) => {
         if (item.id === id) {
-          const updatedItem = { ...item, [field]: value };
+          const updatedItem: QuoteItem = { ...item, [field]: value };
 
           // Logical constraints when switching item type
           if (field === 'itemType') {
@@ -805,6 +1136,37 @@ export default function App() {
                   (aid) => aid !== 'skewWindow1' && aid !== 'skewBalcony1'
                 );
               }
+            }
+
+            if (value !== 'قلاب') {
+              updatedItem.exhaustFan = undefined;
+              updatedItem.exhaustFanLocation = undefined;
+            } else {
+              updatedItem.exhaustFan = item.opening === 'قلاب' ? item.exhaustFan || 'without' : 'without';
+              if (updatedItem.exhaustFan !== 'with') {
+                updatedItem.exhaustFanLocation = undefined;
+              }
+            }
+          }
+
+          if (field === 'exhaustFan') {
+            if (item.opening !== 'قلاب') {
+              updatedItem.exhaustFan = undefined;
+              updatedItem.exhaustFanLocation = undefined;
+            } else if (value === 'with') {
+              updatedItem.exhaustFan = 'with';
+              updatedItem.exhaustFanLocation = item.exhaustFanLocation || 'glass';
+            } else {
+              updatedItem.exhaustFan = 'without';
+              updatedItem.exhaustFanLocation = undefined;
+            }
+          }
+
+          if (field === 'exhaustFanLocation') {
+            if (item.opening === 'قلاب' && item.exhaustFan === 'with') {
+              updatedItem.exhaustFanLocation = value === 'profile' ? 'profile' : 'glass';
+            } else {
+              updatedItem.exhaustFanLocation = undefined;
             }
           }
 
@@ -959,20 +1321,24 @@ export default function App() {
   }, [items, effectiveProfiles, effectiveAddons]);
 
   const handleAddWpcDoor = (newDoor: WpcDoorItem) => {
+    wpcDraftEditedRef.current = true;
     setWpcDoors((prev) => [...prev, newDoor]);
   };
 
   const handleUpdateWpcDoor = (id: number, updatedFields: Partial<WpcDoorItem>) => {
+    wpcDraftEditedRef.current = true;
     setWpcDoors((prev) =>
       prev.map((d) => (d.id === id ? ({ ...d, ...updatedFields } as WpcDoorItem) : d))
     );
   };
 
   const handleRemoveWpcDoor = (id: number) => {
+    wpcDraftEditedRef.current = true;
     setWpcDoors((prev) => prev.filter((d) => d.id !== id));
   };
 
   const handleDuplicateWpcDoor = (door: WpcDoorItem) => {
+    wpcDraftEditedRef.current = true;
     const duplicate: WpcDoorItem = {
       ...door,
       id: Date.now(),
@@ -986,10 +1352,11 @@ export default function App() {
   }, [wpcDoors]);
 
   const handleCustomerChange = (field: keyof CustomerInfo, value: any) => {
+    pvcDraftEditedRef.current = true;
     setCustomer((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleSaveCurrentQuote = (name: string) => {
+  const handleSaveCurrentQuote = async (name: string): Promise<SaveOutcomeStatus> => {
     const combinedSubtotal = calculations.totalPrice + wpcTotalPrice;
     const finalPrice = (() => {
       const val = customer.discountValue || 0;
@@ -1017,45 +1384,55 @@ export default function App() {
       date: new Date().toLocaleDateString('ar-EG'),
       totalPrice: finalPrice,
     };
+
     const updated = [newQuote, ...savedQuotes.filter((q) => q.id !== newQuote.id)];
     setSavedQuotes(updated);
+    await putOfflineRecord('quote', newQuote);
     try {
       localStorage.setItem('almekawy_saved_quotes', JSON.stringify(updated));
     } catch (e) {
       console.error(e);
     }
 
-    // Save to Firebase Firestore Cloud
-    saveQuoteToCloud(newQuote).catch((err) => {
-      console.warn('Firestore save fallback error:', err);
+    const op = await enqueueSyncOp({
+      entityType: 'quote',
+      recordId: newQuote.id,
+      action: 'upsert',
+      payload: newQuote,
     });
+    await refreshPendingSyncCount();
 
     // Also automatically register or update customer in directory
     if (customer.name?.trim()) {
-      handleSaveCustomer({
+      void handleSaveCustomer({
         name: customer.name.trim(),
         phone: (customer.phone || '').trim(),
         address: (customer.address || '').trim(),
       }).catch((err) => console.warn('Auto customer save error:', err));
     }
 
-    // Save to the backend server
-    fetch('/api/quotes', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(newQuote),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success) {
-          console.log('Successfully saved quote to backend server');
-        }
-      })
-      .catch((err) => {
-        console.error('Error saving quote to backend server:', err);
-      });
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      showSaveNotice(
+        'local-offline',
+        'تم حفظ عرض السعر محلياً (غير متصل — ستتم المزامنة تلقائياً عند عودة الإنترنت).'
+      );
+      return 'local-offline';
+    }
+
+    try {
+      await syncQueueExecutor.saveQuote(newQuote);
+      await removeSyncOp(op.opKey);
+      await refreshPendingSyncCount();
+      showSaveNotice('cloud', 'تم حفظ عرض السعر ومزامنته مع السحابة بنجاح.');
+      return 'cloud';
+    } catch (err) {
+      console.warn('Firestore save queued for later sync:', err);
+      showSaveNotice(
+        'local-error',
+        'تم الحفظ محلياً وجدولة المزامنة عند استقرار الاتصال بالسحابة.'
+      );
+      return 'local-error';
+    }
   };
 
   const handleSaveCustomer = async (data: {
@@ -1064,57 +1441,95 @@ export default function App() {
     address?: string;
     notes?: string;
   }) => {
-    try {
-      const saved = await saveCustomerToCloud(data);
-      setSavedCustomers((prev) => {
-        const cleanTarget = normalizePhoneNumber(saved.phone);
-        const filtered = prev.filter((c) => {
-          const cClean = normalizePhoneNumber(c.phone);
-          const samePhone =
-            cleanTarget.length >= 7 && cClean.length >= 7 && cleanTarget === cClean;
-          const sameId = c.id === saved.id;
-          return !samePhone && !sameId;
-        });
-        const updated = [saved, ...filtered];
-        try {
-          localStorage.setItem('almekawy_saved_customers', JSON.stringify(updated));
-        } catch (e) {}
-        return updated;
-      });
+    const trimmedName = data.name.trim();
+    const rawPhone = (data.phone || '').trim();
+    const cleanDigits = normalizePhoneNumber(rawPhone);
+    const customerId =
+      cleanDigits.length >= 7
+        ? `cust_${cleanDigits}`
+        : `cust_name_${encodeURIComponent(trimmedName.toLowerCase().replace(/\s+/g, '_')).slice(
+            0,
+            30
+          )}`;
+    const nowIso = new Date().toISOString();
+    const localRecord: SavedCustomer = {
+      id: customerId,
+      name: trimmedName,
+      phone: cleanDigits || rawPhone,
+      address: data.address?.trim() || '',
+      notes: data.notes?.trim() || '',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
 
-      // Also persist to backend server
-      fetch('/api/customers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(saved),
-      }).catch((err) => console.warn('Backend customer save fallback:', err));
+    setSavedCustomers((prev) => {
+      const filtered = prev.filter((c) => {
+        const cClean = normalizePhoneNumber(c.phone);
+        const samePhone =
+          cleanDigits.length >= 7 && cClean.length >= 7 && cleanDigits === cClean;
+        return !samePhone && c.id !== localRecord.id;
+      });
+      const updated = [localRecord, ...filtered];
+      try {
+        localStorage.setItem('almekawy_saved_customers', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+    await putOfflineRecord('customer', localRecord);
+
+    const op = await enqueueSyncOp({
+      entityType: 'customer',
+      recordId: localRecord.id,
+      action: 'upsert',
+      payload: localRecord,
+    });
+    await refreshPendingSyncCount();
+
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return;
+    }
+
+    try {
+      await syncQueueExecutor.saveCustomer(localRecord);
+      await removeSyncOp(op.opKey);
+      await refreshPendingSyncCount();
     } catch (error) {
-      console.error('Error saving customer:', error);
-      throw error;
+      console.warn('Queued customer save for background sync:', error);
     }
   };
 
   const handleDeleteCustomer = async (id: string) => {
-    try {
-      await deleteCustomerFromCloud(id);
-      setSavedCustomers((prev) => {
-        const updated = prev.filter((c) => c.id !== id);
-        try {
-          localStorage.setItem('almekawy_saved_customers', JSON.stringify(updated));
-        } catch (e) {}
-        return updated;
-      });
+    setSavedCustomers((prev) => {
+      const updated = prev.filter((c) => c.id !== id);
+      try {
+        localStorage.setItem('almekawy_saved_customers', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+    await deleteOfflineRecord('customer', id);
 
-      fetch(`/api/customers/${id}`, {
-        method: 'DELETE',
-      }).catch((err) => console.warn('Backend customer delete fallback:', err));
+    const op = await enqueueSyncOp({
+      entityType: 'customer',
+      recordId: id,
+      action: 'delete',
+    });
+    await refreshPendingSyncCount();
+
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return;
+    }
+
+    try {
+      await syncQueueExecutor.deleteCustomer(id);
+      await removeSyncOp(op.opKey);
+      await refreshPendingSyncCount();
     } catch (error) {
-      console.error('Error deleting customer:', error);
-      throw error;
+      console.warn('Queued customer delete for background sync:', error);
     }
   };
 
   const handleSelectCustomer = (selected: SavedCustomer) => {
+    pvcDraftEditedRef.current = true;
     setCustomer((prev) => ({
       ...prev,
       name: selected.name,
@@ -1125,6 +1540,7 @@ export default function App() {
   };
 
   const handleSelectWpcCustomer = (selected: SavedCustomer) => {
+    wpcDraftEditedRef.current = true;
     setWpcCustomer((prev) => ({
       ...prev,
       name: selected.name,
@@ -1143,6 +1559,7 @@ export default function App() {
   };
 
   const handleLoadQuote = (quote: SavedQuote) => {
+    pvcDraftEditedRef.current = true;
     setCustomer(quote.customer);
     setItems(quote.items);
     setWpcDoors(quote.wpcDoors || []);
@@ -1162,33 +1579,34 @@ export default function App() {
     setActiveMainTab('input');
   };
 
-  const handleDeleteQuote = (id: string) => {
+  const handleDeleteQuote = async (id: string) => {
     const updated = savedQuotes.filter((q) => q.id !== id);
     setSavedQuotes(updated);
+    await deleteOfflineRecord('quote', id);
     try {
       localStorage.setItem('almekawy_saved_quotes', JSON.stringify(updated));
     } catch (e) {
       console.error(e);
     }
 
-    // Delete from Firebase Firestore Cloud
-    deleteQuoteFromCloud(id).catch((err) => {
-      console.warn('Firestore delete fallback error:', err);
+    const op = await enqueueSyncOp({
+      entityType: 'quote',
+      recordId: id,
+      action: 'delete',
     });
+    await refreshPendingSyncCount();
 
-    // Delete from the backend server
-    fetch(`/api/quotes/${id}`, {
-      method: 'DELETE',
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success) {
-          console.log('Successfully deleted quote from backend server');
-        }
-      })
-      .catch((err) => {
-        console.error('Error deleting quote from backend server:', err);
-      });
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return;
+    }
+
+    try {
+      await syncQueueExecutor.deleteQuote(id);
+      await removeSyncOp(op.opKey);
+      await refreshPendingSyncCount();
+    } catch (err) {
+      console.warn('Queued quote delete for background sync:', err);
+    }
   };
 
   const handleSaveQuoteAuto = () => {
@@ -1198,29 +1616,34 @@ export default function App() {
           'ar-EG',
           { hour: '2-digit', minute: '2-digit' }
         )}`;
-    handleSaveCurrentQuote(defaultName);
+    return handleSaveCurrentQuote(defaultName);
   };
 
   const handleWpcCustomerChange = (field: keyof CustomerInfo, value: any) => {
+    wpcDraftEditedRef.current = true;
     setWpcCustomer((prev) => ({ ...prev, [field]: value }));
   };
 
-  const fetchWpcQuotesFromAllSources = async () => {
+  const fetchWpcQuotesFromAllSources = useCallback(async () => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     try {
       const cloudQuotes = await fetchWpcQuotesFromCloud();
       if (cloudQuotes && cloudQuotes.length > 0) {
-        setSavedWpcQuotes(cloudQuotes);
-        try {
-          localStorage.setItem('almekawy_saved_wpc_quotes', JSON.stringify(cloudQuotes));
-        } catch (e) {}
+        await mergeAndPersistEntityList(
+          'wpc_quote',
+          cloudQuotes,
+          savedWpcQuotesRef.current,
+          'almekawy_saved_wpc_quotes',
+          setSavedWpcQuotes
+        );
         return;
       }
     } catch (err) {
       console.warn('Cloud WPC quotes fetch fallback:', err);
     }
-  };
+  }, [mergeAndPersistEntityList]);
 
-  const handleSaveCurrentWpcQuote = (name: string) => {
+  const handleSaveCurrentWpcQuote = async (name: string): Promise<SaveOutcomeStatus> => {
     const finalPrice = (() => {
       const val = wpcCustomer.discountValue || 0;
       const type = wpcCustomer.discountType || 'cash';
@@ -1244,54 +1667,101 @@ export default function App() {
 
     const updated = [newWpcQuote, ...savedWpcQuotes.filter((q) => q.id !== newWpcQuote.id)];
     setSavedWpcQuotes(updated);
+    await putOfflineRecord('wpc_quote', newWpcQuote);
     try {
       localStorage.setItem('almekawy_saved_wpc_quotes', JSON.stringify(updated));
     } catch (e) {}
 
-    saveWpcQuoteToCloud(newWpcQuote).catch((err) => {
-      console.warn('Firestore WPC save error:', err);
+    const op = await enqueueSyncOp({
+      entityType: 'wpc_quote',
+      recordId: newWpcQuote.id,
+      action: 'upsert',
+      payload: newWpcQuote,
     });
+    await refreshPendingSyncCount();
 
     if (wpcCustomer.name?.trim()) {
-      handleSaveCustomer({
+      void handleSaveCustomer({
         name: wpcCustomer.name.trim(),
         phone: (wpcCustomer.phone || '').trim(),
         address: (wpcCustomer.address || '').trim(),
       }).catch(() => {});
     }
+
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      showSaveNotice(
+        'local-offline',
+        'تم حفظ عرض أسعار WPC محلياً (غير متصل — ستتم المزامنة تلقائياً عند عودة الإنترنت).'
+      );
+      return 'local-offline';
+    }
+
+    try {
+      await syncQueueExecutor.saveWpcQuote(newWpcQuote);
+      await removeSyncOp(op.opKey);
+      await refreshPendingSyncCount();
+      showSaveNotice('cloud', 'تم حفظ عرض أسعار WPC ومزامنته مع السحابة بنجاح.');
+      return 'cloud';
+    } catch (err) {
+      console.warn('Firestore WPC save queued:', err);
+      showSaveNotice(
+        'local-error',
+        'تم حفظ عرض أسعار WPC محلياً وجدولة المزامنة عند استقرار الاتصال.'
+      );
+      return 'local-error';
+    }
   };
 
   const handleLoadWpcQuote = (quote: SavedWpcQuote) => {
+    wpcDraftEditedRef.current = true;
     setWpcCustomer(quote.customer);
     setWpcDoors(quote.wpcDoors || []);
     setActiveSystem('wpc');
   };
 
-  const handleDeleteWpcQuote = (id: string) => {
+  const handleDeleteWpcQuote = async (id: string) => {
     const updated = savedWpcQuotes.filter((q) => q.id !== id);
     setSavedWpcQuotes(updated);
+    await deleteOfflineRecord('wpc_quote', id);
     try {
       localStorage.setItem('almekawy_saved_wpc_quotes', JSON.stringify(updated));
     } catch (e) {}
 
-    deleteWpcQuoteFromCloud(id).catch((err) => {
-      console.warn('Firestore WPC delete error:', err);
+    const op = await enqueueSyncOp({
+      entityType: 'wpc_quote',
+      recordId: id,
+      action: 'delete',
     });
+    await refreshPendingSyncCount();
+
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return;
+    }
+
+    try {
+      await syncQueueExecutor.deleteWpcQuote(id);
+      await removeSyncOp(op.opKey);
+      await refreshPendingSyncCount();
+    } catch (err) {
+      console.warn('Queued WPC delete error:', err);
+    }
   };
 
   const handleSaveWpcQuoteAuto = () => {
     const defaultName = wpcCustomer.name?.trim()
       ? `عرض سعر أبواب WPC - ${wpcCustomer.name.trim()}`
       : `عرض سعر أبواب WPC - ${new Date().toLocaleDateString('ar-EG')}`;
-    handleSaveCurrentWpcQuote(defaultName);
+    return handleSaveCurrentWpcQuote(defaultName);
   };
 
   // Independent Armored Doors handlers
   const handleArmoredCustomerChange = (field: keyof CustomerInfo, value: any) => {
+    armoredDraftEditedRef.current = true;
     setArmoredCustomer((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleSelectArmoredCustomer = (selected: SavedCustomer) => {
+    armoredDraftEditedRef.current = true;
     setArmoredCustomer((prev) => ({
       ...prev,
       name: selected.name,
@@ -1301,20 +1771,24 @@ export default function App() {
   };
 
   const handleAddArmoredDoor = (newDoor: ArmoredDoorItem) => {
+    armoredDraftEditedRef.current = true;
     setArmoredDoors((prev) => [...prev, newDoor]);
   };
 
   const handleUpdateArmoredDoor = (id: number, updatedFields: Partial<ArmoredDoorItem>) => {
+    armoredDraftEditedRef.current = true;
     setArmoredDoors((prev) =>
       prev.map((d) => (d.id === id ? ({ ...d, ...updatedFields } as ArmoredDoorItem) : d))
     );
   };
 
   const handleRemoveArmoredDoor = (id: number) => {
+    armoredDraftEditedRef.current = true;
     setArmoredDoors((prev) => prev.filter((d) => d.id !== id));
   };
 
   const handleDuplicateArmoredDoor = (door: ArmoredDoorItem) => {
+    armoredDraftEditedRef.current = true;
     const duplicate: ArmoredDoorItem = {
       ...door,
       id: Date.now(),
@@ -1327,21 +1801,25 @@ export default function App() {
     return calculateArmoredQuoteTotal(armoredDoors);
   }, [armoredDoors]);
 
-  const fetchArmoredQuotesFromAllSources = async () => {
+  const fetchArmoredQuotesFromAllSources = useCallback(async () => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     try {
       const cloudQuotes = await fetchArmoredQuotesFromCloud();
       if (cloudQuotes && cloudQuotes.length > 0) {
-        setSavedArmoredQuotes(cloudQuotes);
-        try {
-          localStorage.setItem('almekawy_saved_armored_quotes', JSON.stringify(cloudQuotes));
-        } catch (e) {}
+        await mergeAndPersistEntityList(
+          'armored_quote',
+          cloudQuotes,
+          savedArmoredQuotesRef.current,
+          'almekawy_saved_armored_quotes',
+          setSavedArmoredQuotes
+        );
       }
     } catch (err) {
       console.warn('Cloud Armored quotes fetch fallback:', err);
     }
-  };
+  }, [mergeAndPersistEntityList]);
 
-  const handleSaveCurrentArmoredQuote = (name: string) => {
+  const handleSaveCurrentArmoredQuote = async (name: string): Promise<SaveOutcomeStatus> => {
     const newArmoredQuote: SavedArmoredQuote = {
       id: Date.now().toString(),
       name,
@@ -1356,47 +1834,92 @@ export default function App() {
       ...savedArmoredQuotes.filter((q) => q.id !== newArmoredQuote.id),
     ];
     setSavedArmoredQuotes(updated);
+    await putOfflineRecord('armored_quote', newArmoredQuote);
     try {
       localStorage.setItem('almekawy_saved_armored_quotes', JSON.stringify(updated));
     } catch (e) {}
 
-    saveArmoredQuoteToCloud(newArmoredQuote).catch((err) => {
-      console.warn('Firestore Armored save error:', err);
+    const op = await enqueueSyncOp({
+      entityType: 'armored_quote',
+      recordId: newArmoredQuote.id,
+      action: 'upsert',
+      payload: newArmoredQuote,
     });
+    await refreshPendingSyncCount();
 
     if (armoredCustomer.name?.trim()) {
-      handleSaveCustomer({
+      void handleSaveCustomer({
         name: armoredCustomer.name.trim(),
         phone: (armoredCustomer.phone || '').trim(),
         address: (armoredCustomer.address || '').trim(),
       }).catch(() => {});
     }
+
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      showSaveNotice(
+        'local-offline',
+        'تم حفظ عرض الأبواب المصفحة محلياً (غير متصل — ستتم المزامنة تلقائياً عند عودة الإنترنت).'
+      );
+      return 'local-offline';
+    }
+
+    try {
+      await syncQueueExecutor.saveArmoredQuote(newArmoredQuote);
+      await removeSyncOp(op.opKey);
+      await refreshPendingSyncCount();
+      showSaveNotice('cloud', 'تم حفظ عرض الأبواب المصفحة ومزامنته مع السحابة بنجاح.');
+      return 'cloud';
+    } catch (err) {
+      console.warn('Firestore Armored save queued:', err);
+      showSaveNotice(
+        'local-error',
+        'تم حفظ عرض الأبواب المصفحة محلياً وجدولة المزامنة عند استقرار الاتصال.'
+      );
+      return 'local-error';
+    }
   };
 
   const handleLoadArmoredQuote = (quote: SavedArmoredQuote) => {
+    armoredDraftEditedRef.current = true;
     setArmoredCustomer(quote.customer);
     setArmoredDoors(quote.armoredDoors || []);
     setActiveSystem('armored');
     setActiveArmoredMainTab('input');
   };
 
-  const handleDeleteArmoredQuote = (id: string) => {
+  const handleDeleteArmoredQuote = async (id: string) => {
     const updated = savedArmoredQuotes.filter((q) => q.id !== id);
     setSavedArmoredQuotes(updated);
+    await deleteOfflineRecord('armored_quote', id);
     try {
       localStorage.setItem('almekawy_saved_armored_quotes', JSON.stringify(updated));
     } catch (e) {}
 
-    deleteArmoredQuoteFromCloud(id).catch((err) => {
-      console.warn('Firestore Armored delete error:', err);
+    const op = await enqueueSyncOp({
+      entityType: 'armored_quote',
+      recordId: id,
+      action: 'delete',
     });
+    await refreshPendingSyncCount();
+
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return;
+    }
+
+    try {
+      await syncQueueExecutor.deleteArmoredQuote(id);
+      await removeSyncOp(op.opKey);
+      await refreshPendingSyncCount();
+    } catch (err) {
+      console.warn('Queued Armored delete error:', err);
+    }
   };
 
   const handleSaveArmoredQuoteAuto = () => {
     const defaultName = armoredCustomer.name?.trim()
       ? `عرض سعر أبواب مصفحة - ${armoredCustomer.name.trim()}`
       : `عرض سعر أبواب مصفحة - ${new Date().toLocaleDateString('ar-EG')}`;
-    handleSaveCurrentArmoredQuote(defaultName);
+    return handleSaveCurrentArmoredQuote(defaultName);
   };
 
   const handlePrint = () => {
@@ -1477,6 +2000,10 @@ export default function App() {
             customersCount={savedCustomers.length}
             onOpenCustomers={() => setPasswordTarget('customers')}
             isPrimaryHeading={true}
+            isOnline={isOnline}
+            isSyncing={isSyncing}
+            pendingSyncCount={pendingSyncCount}
+            onSyncNow={() => void runSyncFlush()}
           />
 
           <main className={`w-full max-w-none mx-auto ${activeWpcMainTab === 'quote' ? 'p-0' : 'px-4 sm:px-8 py-8 md:py-12'} print:max-w-none print:p-0 print:m-0 transition-all duration-500`}>
@@ -1526,6 +2053,7 @@ export default function App() {
                     });
                   }}
                   onSelectCustomer={(selected) => {
+                    wpcDraftEditedRef.current = true;
                     setWpcCustomer((prev) => ({
                       ...prev,
                       name: selected.name,
@@ -1540,6 +2068,7 @@ export default function App() {
                   wpcPricing={doorsPricing.wpc}
                   pricingSyncStatus={doorsPricingSyncStatus}
                   pricingErrorText={doorsPricingErrorText}
+                  isOnline={isOnline}
                   onRetryLoadPricing={loadLatestDoorsPricingFromServer}
                   onAddDoor={handleAddWpcDoor}
                   onUpdateDoor={handleUpdateWpcDoor}
@@ -1581,6 +2110,10 @@ export default function App() {
               customersCount={savedCustomers.length}
               onOpenCustomers={() => setPasswordTarget('customers')}
               isPrimaryHeading={true}
+              isOnline={isOnline}
+              isSyncing={isSyncing}
+              pendingSyncCount={pendingSyncCount}
+              onSyncNow={() => void runSyncFlush()}
             />
           )}
 
@@ -1719,6 +2252,10 @@ export default function App() {
               customersCount={savedCustomers.length}
               onOpenCustomers={() => setPasswordTarget('customers')}
               isPrimaryHeading={true}
+              isOnline={isOnline}
+              isSyncing={isSyncing}
+              pendingSyncCount={pendingSyncCount}
+              onSyncNow={() => void runSyncFlush()}
             />
           )}
 
@@ -1780,6 +2317,7 @@ export default function App() {
                   armoredTypes={doorsPricing.armored}
                   pricingSyncStatus={doorsPricingSyncStatus}
                   pricingErrorText={doorsPricingErrorText}
+                  isOnline={isOnline}
                   onRetryLoadPricing={loadLatestDoorsPricingFromServer}
                   onAddDoor={handleAddArmoredDoor}
                   onUpdateDoor={handleUpdateArmoredDoor}
@@ -1860,6 +2398,7 @@ export default function App() {
             currentCustomerName={customer.name}
             formatCurrency={formatCurrency}
             onRefresh={fetchQuotesFromAllSources}
+            isOnline={isOnline}
           />
         )}
       </AnimatePresence>
@@ -1876,6 +2415,7 @@ export default function App() {
             currentCustomerName={wpcCustomer.name}
             formatCurrency={formatCurrency}
             onRefresh={fetchWpcQuotesFromAllSources}
+            isOnline={isOnline}
           />
         )}
       </AnimatePresence>
@@ -1892,6 +2432,7 @@ export default function App() {
             currentCustomerName={armoredCustomer.name}
             formatCurrency={formatCurrency}
             onRefresh={fetchArmoredQuotesFromAllSources}
+            isOnline={isOnline}
           />
         )}
       </AnimatePresence>
@@ -1914,9 +2455,12 @@ export default function App() {
             onSaveCustomer={handleSaveCustomer}
             onDeleteCustomer={handleDeleteCustomer}
             onRefresh={fetchCustomersFromAllSources}
+            isOnline={isOnline}
           />
         )}
       </AnimatePresence>
+
+      <SaveFeedbackToast notice={saveNotice} onDismiss={() => setSaveNotice(null)} />
 
       <AnimatePresence>
         {passwordTarget && (

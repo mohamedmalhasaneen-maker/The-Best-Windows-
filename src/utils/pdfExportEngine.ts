@@ -454,6 +454,8 @@ export function buildQuotePdfCacheKey(
         it.innerType || 'glass',
         it.glassType,
         it.hingePanes || '',
+        it.exhaustFan || '',
+        it.exhaustFanLocation || '',
         it.itemTotal,
         it.profilePrice,
         it.flatProfilePrice || 0,
