@@ -136,6 +136,10 @@ export default function PricingTable({ profiles, addons }: PricingTableProps) {
                             <span className="text-xs text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-100 font-bold block">
                               سعر المتر × 1.5
                             </span>
+                          ) : addon.id === 'pandaBalcony' ? (
+                            <span className="text-xs text-amber-700 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-100 font-bold block">
+                              سعر المتر × 1.75
+                            </span>
                           ) : addon.isFlat ? (
                             <span className="text-xs text-amber-600 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-100 font-bold block">
                               +{formatCurrency(addon.price)} / {addon.unit || 'قطعة'}

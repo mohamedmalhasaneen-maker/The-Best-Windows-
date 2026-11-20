@@ -306,14 +306,31 @@ export default function App() {
     if (config.version < pricingVersionRef.current) {
       return;
     }
+    let ensuredAddons = config.addons;
+    if (!config.addons.pandaBalcony && ADDONS.pandaBalcony) {
+      const rebuilt: Record<string, Addon> = {};
+      let inserted = false;
+      for (const [k, v] of Object.entries(config.addons)) {
+        rebuilt[k] = v;
+        if (k === 'panda') {
+          rebuilt.pandaBalcony = { ...ADDONS.pandaBalcony };
+          inserted = true;
+        }
+      }
+      if (!inserted) {
+        rebuilt.pandaBalcony = { ...ADDONS.pandaBalcony };
+      }
+      ensuredAddons = rebuilt;
+    }
+
     pricingVersionRef.current = config.version;
     setProfiles(config.profiles);
-    setAddons(config.addons);
+    setAddons(ensuredAddons);
     setPricingSyncStatus('synced');
     setPricingErrorText(null);
 
     if (config.version > 0) {
-      void savePricingCache(config);
+      void savePricingCache({ ...config, addons: ensuredAddons });
     }
 
     // Keep active draft items valid if a profile or addon was removed, unless viewing a historical quote snapshot
@@ -323,7 +340,7 @@ export default function App() {
         prev.map((item) => ({
           ...item,
           profile: config.profiles[item.profile] ? item.profile : fallbackProfile,
-          addons: item.addons.filter((addonId) => Boolean(config.addons[addonId])),
+          addons: item.addons.filter((addonId) => Boolean(ensuredAddons[addonId])),
         }))
       );
     }
@@ -1094,19 +1111,21 @@ export default function App() {
             if (value === 'window') {
               // Remove balcony items
               newAddons = newAddons.filter(
-                (aid) => aid !== 'skewBalcony1' && aid !== 'skewBalcony2'
+                (aid) =>
+                  aid !== 'skewBalcony1' && aid !== 'skewBalcony2' && aid !== 'pandaBalcony'
               );
             } else if (value === 'balcony') {
               // Remove window items
               newAddons = newAddons.filter((aid) => aid !== 'skewWindow1' && aid !== 'skewWindow2');
             } else if (value === 'door') {
-              // Remove tilt-and-turn (skew) additions, double handle, and pombe
+              // Remove tilt-and-turn (skew) additions, double handle, pombe, and balcony addons
               newAddons = newAddons.filter(
                 (aid) =>
                   aid !== 'skewWindow1' &&
                   aid !== 'skewWindow2' &&
                   aid !== 'skewBalcony1' &&
                   aid !== 'skewBalcony2' &&
+                  aid !== 'pandaBalcony' &&
                   aid !== 'doubleHandle' &&
                   aid !== 'pombe'
               );
@@ -1236,6 +1255,18 @@ export default function App() {
               const index = newAddons.indexOf('skewBalcony1');
               if (index > -1) newAddons.splice(index, 1);
             }
+            if (value.includes('pandaBalcony') && item.addons.indexOf('pandaBalcony') === -1) {
+              const index = newAddons.indexOf('panda');
+              if (index > -1) newAddons.splice(index, 1);
+            }
+            if (value.includes('panda') && item.addons.indexOf('panda') === -1) {
+              const index = newAddons.indexOf('pandaBalcony');
+              if (index > -1) newAddons.splice(index, 1);
+            }
+            if (item.itemType !== 'balcony') {
+              const pandaBalconyIdx = newAddons.indexOf('pandaBalcony');
+              if (pandaBalconyIdx > -1) newAddons.splice(pandaBalconyIdx, 1);
+            }
             updatedItem.addons = newAddons;
           }
 
@@ -1278,7 +1309,13 @@ export default function App() {
       const selectedProfile = effectiveProfiles[item.profile];
       const isFlatProfile = Boolean(selectedProfile?.isFlat);
       let rawProfilePrice = selectedProfile?.price || 0;
-      if (item.addons.includes('panda')) {
+      const hasPandaBalcony =
+        item.itemType === 'balcony' &&
+        item.addons.includes('pandaBalcony');
+
+      if (hasPandaBalcony) {
+        rawProfilePrice = rawProfilePrice * 1.75;
+      } else if (item.addons.includes('panda')) {
         rawProfilePrice = rawProfilePrice * 1.5;
       }
       const profilePrice = isFlatProfile ? 0 : rawProfilePrice;
@@ -1288,6 +1325,7 @@ export default function App() {
       let flatAddonsPrice = 0;
 
       item.addons.forEach((id) => {
+        if (id === 'panda' || id === 'pandaBalcony') return;
         const addon = effectiveAddons[id];
         if (addon) {
           if (addon.isFlat) {

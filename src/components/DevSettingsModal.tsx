@@ -941,41 +941,54 @@ export const DevSettingsModal: React.FC<DevSettingsModalProps> = ({
                                     يعمل أيضاً كمضاعف × 1.5 لسعر القطاع الأساسي
                                   </span>
                                 )}
+                                {a.id === 'pandaBalcony' && (
+                                  <span className="inline-block text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold mr-2">
+                                    يعمل كمضاعف × 1.75 لسعر القطاع الأساسي (للبلكونات فقط)
+                                  </span>
+                                )}
                               </div>
                               <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  disabled={isSaving}
-                                  value={a.price === 0 ? '' : a.price}
-                                  onChange={(e) =>
-                                    handleAddonPriceChange(
-                                      a.id,
-                                      e.target.value === '' ? 0 : Number(e.target.value)
-                                    )
-                                  }
-                                  className="w-24 p-2 text-left bg-slate-50 border-2 border-slate-150 rounded-xl font-bold font-mono focus:border-[#0F172A] focus:bg-white outline-none"
-                                />
-                                {a.id === 'panda' ? (
-                                  <span className="text-xs text-slate-400 font-extrabold font-mono px-2">
-                                    ج.م / م²
+                                {a.id === 'pandaBalcony' ? (
+                                  <span className="text-xs text-amber-800 bg-amber-50 border border-amber-200 font-extrabold px-3 py-2 rounded-xl">
+                                    سعر المتر × 1.75
                                   </span>
                                 ) : (
-                                  <select
-                                    value={modeKey}
-                                    disabled={isSaving}
-                                    onChange={(e) =>
-                                      handleAddonModeChange(a.id, e.target.value as PricingModeKey)
-                                    }
-                                    aria-label={`طريقة تسعير ${a.name}`}
-                                    className="p-2 bg-slate-50 border border-slate-200 rounded-xl text-[11px] font-extrabold text-slate-700 outline-none cursor-pointer"
-                                  >
-                                    <option value="sqm">ج.م / م²</option>
-                                    <option value="piece">ج.م / للقطعة</option>
-                                    <option value="single_sash">ج.م / للضلفة</option>
-                                    <option value="double_sash">ج.م / للضلفتين</option>
-                                    <option value="opening">ج.م / للفتحة</option>
-                                  </select>
+                                  <>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      disabled={isSaving}
+                                      value={a.price === 0 ? '' : a.price}
+                                      onChange={(e) =>
+                                        handleAddonPriceChange(
+                                          a.id,
+                                          e.target.value === '' ? 0 : Number(e.target.value)
+                                        )
+                                      }
+                                      className="w-24 p-2 text-left bg-slate-50 border-2 border-slate-150 rounded-xl font-bold font-mono focus:border-[#0F172A] focus:bg-white outline-none"
+                                    />
+                                    {a.id === 'panda' ? (
+                                      <span className="text-xs text-slate-400 font-extrabold font-mono px-2">
+                                        ج.م / م²
+                                      </span>
+                                    ) : (
+                                      <select
+                                        value={modeKey}
+                                        disabled={isSaving}
+                                        onChange={(e) =>
+                                          handleAddonModeChange(a.id, e.target.value as PricingModeKey)
+                                        }
+                                        aria-label={`طريقة تسعير ${a.name}`}
+                                        className="p-2 bg-slate-50 border border-slate-200 rounded-xl text-[11px] font-extrabold text-slate-700 outline-none cursor-pointer"
+                                      >
+                                        <option value="sqm">ج.م / م²</option>
+                                        <option value="piece">ج.م / للقطعة</option>
+                                        <option value="single_sash">ج.م / للضلفة</option>
+                                        <option value="double_sash">ج.م / للضلفتين</option>
+                                        <option value="opening">ج.م / للفتحة</option>
+                                      </select>
+                                    )}
+                                  </>
                                 )}
 
                                 {confirmDeleteId === a.id ? (

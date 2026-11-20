@@ -27,6 +27,15 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
     [item, profiles, addons, formatCurrency]
   );
 
+  const formatAddonPrice = (ad: Addon) => {
+    if (ad.id === 'panda') return 'متر × 1.5';
+    if (ad.id === 'pandaBalcony') return 'متر × 1.75';
+    if (ad.isFlat) {
+      return `+${ad.price} ج.م${ad.unit ? ` / ${ad.unit}` : ''}`;
+    }
+    return `+${ad.price} ج.م/م²`;
+  };
+
   const getAddonStatus = (key: string) => {
     const isDoubleGlass = key === 'doubleGlass';
     const isColorGlass = key === 'colorGlass';
@@ -37,12 +46,15 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
     const isSkewWindow2 = key === 'skewWindow2';
     const isSkewBalcony1 = key === 'skewBalcony1';
     const isSkewBalcony2 = key === 'skewBalcony2';
+    const isPanda = key === 'panda';
+    const isPandaBalcony = key === 'pandaBalcony';
     const isDoubleHandle = key === 'doubleHandle';
 
-    const isBalconyAddon = key === 'skewBalcony1' || key === 'skewBalcony2';
+    const isSkewBalconyAddon = key === 'skewBalcony1' || key === 'skewBalcony2';
+    const isBalconyAddon = isSkewBalconyAddon || isPandaBalcony;
     const isWindowAddon = key === 'skewWindow1' || key === 'skewWindow2';
-    const isSkewAddon = isBalconyAddon || isWindowAddon;
-    const isDoorForbiddenAddon = key === 'skewWindow1' || key === 'skewWindow2' || key === 'skewBalcony1' || key === 'skewBalcony2' || key === 'doubleHandle' || key === 'pombe';
+    const isSkewAddon = isSkewBalconyAddon || isWindowAddon;
+    const isDoorForbiddenAddon = key === 'skewWindow1' || key === 'skewWindow2' || key === 'skewBalcony1' || key === 'skewBalcony2' || key === 'pandaBalcony' || key === 'doubleHandle' || key === 'pombe';
 
     // Check hinged single/double sash conflicts
     const isHinged = item.opening === 'مفصلي';
@@ -59,6 +71,8 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
       (isSingleColorGlass && (item.addons.includes('doubleGlass') || item.addons.includes('colorGlass'))) ||
       (isPleated && item.addons.includes('blackout')) ||
       (isBlackout && item.addons.includes('pleated')) ||
+      (isPanda && item.addons.includes('pandaBalcony')) ||
+      (isPandaBalcony && item.addons.includes('panda')) ||
       (isSkewWindow1 && item.addons.includes('skewWindow2')) ||
       (isSkewWindow2 && item.addons.includes('skewWindow1')) ||
       (isSkewBalcony1 && item.addons.includes('skewBalcony2')) ||
@@ -83,6 +97,10 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
       conflictTag = ' (تم اختيار بلاك أوت)';
     } else if (isBlackout && item.addons.includes('pleated')) {
       conflictTag = ' (تم اختيار سلك بليسيه)';
+    } else if (isPanda && item.addons.includes('pandaBalcony')) {
+      conflictTag = ' (تم اختيار نظام باندا للبلكونات)';
+    } else if (isPandaBalcony && item.addons.includes('panda')) {
+      conflictTag = ' (تم اختيار نظام باندا × 1.5)';
     } else if (isSkewAddon && item.opening !== 'مفصلي') {
       conflictTag = ' (متاح لنظام الفتح المفصلي فقط)';
     } else if (isForbiddenForSingle) {
@@ -411,14 +429,6 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
             {(Object.entries(addons) as [string, Addon][]).map(([key, addon]) => {
               const { isDisabled, conflictTag } = getAddonStatus(key);
 
-              const formatAddonPrice = (ad: typeof addon) => {
-                if (ad.id === 'panda') return 'متر × 1.5';
-                if (ad.isFlat) {
-                  return `+${ad.price} ج.م${ad.unit ? ` / ${ad.unit}` : ''}`;
-                }
-                return `+${ad.price} ج.م/م²`;
-              };
-
               return (
                 <div 
                   key={key} 
@@ -456,6 +466,10 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
                         {key === 'skewWindow1' || key === 'skewWindow2' || key === 'skewBalcony1' || key === 'skewBalcony2' ? (
                           <span className="text-[10px] text-slate-400 font-bold">
                             نظام المفصلي قلاب
+                          </span>
+                        ) : key === 'pandaBalcony' ? (
+                          <span className="text-[10px] text-slate-400 font-bold">
+                            سعر المتر الأساسي × 1.75
                           </span>
                         ) : null}
                       </div>
@@ -521,14 +535,6 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
                   {(Object.entries(addons) as [string, Addon][]).map(([key, addon]) => {
                     const { isDisabled, conflictTag } = getAddonStatus(key);
 
-                    const formatAddonPrice = (ad: typeof addon) => {
-                      if (ad.id === 'panda') return 'متر × 1.5';
-                      if (ad.isFlat) {
-                        return `+${ad.price} ج.م${ad.unit ? ` / ${ad.unit}` : ''}`;
-                      }
-                      return `+${ad.price} ج.م/م²`;
-                    };
-
                     return (
                       <div 
                         key={key} 
@@ -566,6 +572,10 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
                               {key === 'skewWindow1' || key === 'skewWindow2' || key === 'skewBalcony1' || key === 'skewBalcony2' ? (
                                 <span className="text-[10px] text-slate-400 font-bold">
                                   نظام المفصلي قلاب
+                                </span>
+                              ) : key === 'pandaBalcony' ? (
+                                <span className="text-[10px] text-slate-400 font-bold">
+                                  سعر المتر الأساسي × 1.75
                                 </span>
                               ) : null}
                             </div>
@@ -611,6 +621,11 @@ const ItemCard: React.FC<Props> = ({ item, index, updateItem, removeItem, toggle
           {item.flatAddonsPrice && item.flatAddonsPrice > 0 ? (
             <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-100 font-extrabold text-xs">
               + {formatCurrency(item.flatAddonsPrice)} إضافات مقطوعة
+            </span>
+          ) : null}
+          {item.itemType === 'balcony' && item.addons.includes('pandaBalcony') ? (
+            <span className="text-amber-800 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200 font-extrabold text-xs">
+              معامل {addons.pandaBalcony?.name || 'نظام باندا للبلكونات'} (× 1.75)
             </span>
           ) : null}
         </div>

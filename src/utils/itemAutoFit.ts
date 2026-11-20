@@ -437,7 +437,24 @@ function fitDetailsCell(item: CalculatedItem, profiles: Record<string, Profile>)
   };
 }
 
-function fitAddonsCell(item: CalculatedItem, addons: Record<string, Addon>): AddonsCellFit {
+export function formatQuoteAddonLabel(
+  addonId: string,
+  item: CalculatedItem,
+  addons: Record<string, Addon>,
+  _formatCurrency: (val: number) => string = defaultCurrencyFormatter
+): string {
+  const baseName = addons[addonId]?.name || addonId;
+  if (addonId === 'pandaBalcony' && item.itemType === 'balcony') {
+    return `${baseName} (× 1.75)`;
+  }
+  return baseName;
+}
+
+function fitAddonsCell(
+  item: CalculatedItem,
+  addons: Record<string, Addon>,
+  formatCurrency: (val: number) => string
+): AddonsCellFit {
   if (item.addons.length === 0) {
     return {
       textClass: 'text-[10px]',
@@ -448,7 +465,9 @@ function fitAddonsCell(item: CalculatedItem, addons: Record<string, Addon>): Add
     };
   }
 
-  const labels = item.addons.map((id) => `• ${addons[id]?.name || id}`);
+  const labels = item.addons.map(
+    (id) => `• ${formatQuoteAddonLabel(id, item, addons, formatCurrency)}`
+  );
   const totalSteps = Math.round((10 - MIN_ITEM_FONT_PX) / FONT_STEP_PX);
 
   for (let step = 0; step <= totalSteps; step++) {
@@ -708,7 +727,7 @@ export function computeItemRowAutoFit(
     11
   );
   const details = fitDetailsCell(item, profiles);
-  const addonsFit = fitAddonsCell(item, addons);
+  const addonsFit = fitAddonsCell(item, addons, formatCurrency);
   const price = fitPriceCell(item, profiles, formatCurrency);
 
   const overflowColumns: string[] = [];

@@ -130,6 +130,7 @@ export const ADDONS: Record<string, Addon> = {
   colorGlass: { id: 'colorGlass', name: 'زجاج دبل ألوان خاصة', price: 1000 },
   specialColor: { id: 'specialColor', name: 'ألوان قطاعات خاصة (خشبي - أرو - رمادي - أسود)', price: 1800 },
   panda: { id: 'panda', name: 'نظام باندا (ضلفة على ضلفة)', price: 0 },
+  pandaBalcony: { id: 'pandaBalcony', name: 'نظام باندا للبلكونات', price: 0 },
   pombe: { id: 'pombe', name: 'نظام البومبي', price: 4000, isFlat: true, unit: 'للقطعة' },
   dawr: { id: 'dawr', name: 'نظام الدوران', price: 700, isFlat: true, unit: 'للقطعة' },
   doubleHandle: { id: 'doubleHandle', name: 'نظام اتنين مقبض', price: 650, isFlat: true, unit: 'للفتحة' },

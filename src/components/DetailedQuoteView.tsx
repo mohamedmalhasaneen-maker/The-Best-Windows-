@@ -27,6 +27,7 @@ import {
   warmUpPdfAssets,
   nextPaintFrame,
 } from '../utils/pdfExportEngine';
+import { formatQuoteAddonLabel } from '../utils/itemAutoFit';
 
 interface Props {
   customer: CustomerInfo;
@@ -671,7 +672,7 @@ const A4PageSheet = React.memo(function A4PageSheet({
                                   key={addonId}
                                   className={`font-bold text-slate-700 whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${autoFit.addons.textClass}`}
                                 >
-                                  • {addons[addonId]?.name || addonId}
+                                  • {formatQuoteAddonLabel(addonId, item, addons, formatCurrency)}
                                 </span>
                               ))}
                             </div>

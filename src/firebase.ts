@@ -3,8 +3,7 @@ import { getAuth } from 'firebase/auth';
 import {
   getFirestore,
   initializeFirestore,
-  persistentLocalCache,
-  persistentMultipleTabManager,
+  memoryLocalCache,
   collection,
   doc,
   setDoc,
@@ -35,6 +34,7 @@ import {
 } from './types';
 import { DEFAULT_WPC_PRICING_CONFIG } from './constants/wpcConstants';
 import { DEFAULT_ARMORED_DOOR_TYPES } from './constants/armoredConstants';
+import { ADDONS } from './constants';
 
 // Initialize Firebase App safely
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
@@ -45,16 +45,14 @@ const dbId =
     ? firebaseConfig.firestoreDatabaseId
     : undefined;
 
-// Enable Firestore persistent IndexedDB cache across tabs while keeping experimentalAutoDetectLongPolling
+// Enable Firestore memory cache while keeping experimentalAutoDetectLongPolling
 let firestoreDb;
 try {
   firestoreDb = initializeFirestore(
     app,
     {
       experimentalAutoDetectLongPolling: true,
-      localCache: persistentLocalCache({
-        tabManager: persistentMultipleTabManager(),
-      }),
+      localCache: memoryLocalCache(),
     },
     dbId
   );
@@ -491,6 +489,17 @@ function reconstructOrderedPricing(data: Record<string, any>): PricingConfig {
         ...(a.isFlat ? { isFlat: true, unit: a.unit || 'للقطعة' } : {}),
       };
       finalAddonOrder.push(id);
+    }
+  }
+
+  // Ensure built-in dynamic balcony Panda addon exists even on older Firestore pricing docs
+  if (!orderedAddons.pandaBalcony && ADDONS.pandaBalcony) {
+    orderedAddons.pandaBalcony = { ...ADDONS.pandaBalcony };
+    const pandaIdx = finalAddonOrder.indexOf('panda');
+    if (pandaIdx !== -1) {
+      finalAddonOrder.splice(pandaIdx + 1, 0, 'pandaBalcony');
+    } else {
+      finalAddonOrder.push('pandaBalcony');
     }
   }
 
